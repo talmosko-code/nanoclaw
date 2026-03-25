@@ -78,7 +78,10 @@ async function transcribeAudio(
   const pythonBin = path.join(venvPath, 'bin', 'python');
 
   if (!fs.existsSync(pythonBin)) {
-    logger.warn({ pythonBin }, 'Whisper venv not found — voice transcription disabled');
+    logger.warn(
+      { pythonBin },
+      'Whisper venv not found — voice transcription disabled',
+    );
     return null;
   }
 
@@ -86,12 +89,18 @@ async function transcribeAudio(
   fs.writeFileSync(tmpFile, audioBuffer);
 
   const args = [TRANSCRIBE_SCRIPT, tmpFile];
-  if (process.env.WHISPER_MODEL) args.push('--model', process.env.WHISPER_MODEL);
-  if (process.env.WHISPER_LANGUAGE) args.push('--language', process.env.WHISPER_LANGUAGE);
+  if (process.env.WHISPER_MODEL)
+    args.push('--model', process.env.WHISPER_MODEL);
+  if (process.env.WHISPER_LANGUAGE)
+    args.push('--language', process.env.WHISPER_LANGUAGE);
 
   return new Promise((resolve) => {
     execFile(pythonBin, args, { timeout: 120_000 }, (err, stdout) => {
-      try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch {
+        /* ignore */
+      }
       if (err) {
         logger.warn({ err }, 'Voice transcription failed');
         resolve(null);
@@ -146,10 +155,17 @@ export class TelegramChannel implements Channel {
       const groups = this.opts.registeredGroups();
       const groupList = Object.values(groups);
       if (groupList.length === 0) {
-        ctx.reply(`${ASSISTANT_NAME} is running.\n\nNo groups registered yet. Use /chatid to get this chat's ID, then register it.`);
+        ctx.reply(
+          `${ASSISTANT_NAME} is running.\n\nNo groups registered yet. Use /chatid to get this chat's ID, then register it.`,
+        );
       } else {
-        const lines = groupList.map((g) => `• ${g.name}${g.isMain ? ' *(main)*' : ''}`).join('\n');
-        ctx.reply(`${ASSISTANT_NAME} is running.\n\n*Registered groups (${groupList.length}):*\n${lines}`, { parse_mode: 'Markdown' });
+        const lines = groupList
+          .map((g) => `• ${g.name}${g.isMain ? ' *(main)*' : ''}`)
+          .join('\n');
+        ctx.reply(
+          `${ASSISTANT_NAME} is running.\n\n*Registered groups (${groupList.length}):*\n${lines}`,
+          { parse_mode: 'Markdown' },
+        );
       }
     });
 
@@ -157,11 +173,11 @@ export class TelegramChannel implements Channel {
     this.bot.command('help', (ctx) => {
       ctx.reply(
         `*${ASSISTANT_NAME} — available commands*\n\n` +
-        `/ping — Check if the bot is online\n` +
-        `/status — Show registered groups\n` +
-        `/chatid — Get this chat's registration ID\n` +
-        `/help — Show this message\n\n` +
-        `Mention @${ctx.me.username} or use the trigger word to talk to the AI agent.`,
+          `/ping — Check if the bot is online\n` +
+          `/status — Show registered groups\n` +
+          `/chatid — Get this chat's registration ID\n` +
+          `/help — Show this message\n\n` +
+          `Mention @${ctx.me.username} or use the trigger word to talk to the AI agent.`,
         { parse_mode: 'Markdown' },
       );
     });
@@ -299,9 +315,16 @@ export class TelegramChannel implements Channel {
         ctx.from?.id?.toString() ||
         'Unknown';
       const msgId = ctx.message.message_id.toString();
-      const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
 
-      this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        undefined,
+        'telegram',
+        isGroup,
+      );
 
       let content = '[Voice message]';
       try {
@@ -311,7 +334,10 @@ export class TelegramChannel implements Channel {
           const transcript = await transcribeAudio(buf, msgId);
           if (transcript) {
             content = `[Voice: ${transcript}]`;
-            logger.info({ chatJid, chars: transcript.length }, 'Voice message transcribed');
+            logger.info(
+              { chatJid, chars: transcript.length },
+              'Voice message transcribed',
+            );
           } else {
             content = '[Voice message - transcription unavailable]';
           }
@@ -362,9 +388,18 @@ export class TelegramChannel implements Channel {
           );
           try {
             await this.bot!.api.setMyCommands([
-              { command: 'ping', description: `Check if ${ASSISTANT_NAME} is online` },
-              { command: 'status', description: 'Show registered groups and bot status' },
-              { command: 'chatid', description: 'Get this chat\'s registration ID' },
+              {
+                command: 'ping',
+                description: `Check if ${ASSISTANT_NAME} is online`,
+              },
+              {
+                command: 'status',
+                description: 'Show registered groups and bot status',
+              },
+              {
+                command: 'chatid',
+                description: "Get this chat's registration ID",
+              },
               { command: 'help', description: 'List available commands' },
             ]);
           } catch (err) {
