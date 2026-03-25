@@ -153,6 +153,10 @@ function buildVolumeMounts(
               type: 'http',
               url: 'https://mcp.notion.com/mcp',
             },
+            'notion-lotechni': {
+              type: 'http',
+              url: 'https://mcp.notion.com/mcp',
+            },
           },
         },
         null,
@@ -178,19 +182,24 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Mount host Claude credentials (MCP OAuth tokens) so containers can use
-  // Notion and other MCP servers that require OAuth (e.g. mcp.notion.com).
+  // Sync host Claude credentials (MCP OAuth tokens) into the session directory
+  // so containers can use Notion and other MCP servers that require OAuth.
+  // We copy rather than bind-mount because the session dir is already mounted
+  // at /home/node/.claude — a file bind-mount inside a directory bind-mount
+  // is unreliable when the target file already exists in the directory.
   const hostCredentials = path.join(
     os.homedir(),
     '.claude',
     '.credentials.json',
   );
+  const sessionCredentials = path.join(groupSessionsDir, '.credentials.json');
   if (fs.existsSync(hostCredentials)) {
-    mounts.push({
-      hostPath: hostCredentials,
-      containerPath: '/home/node/.claude/.credentials.json',
-      readonly: true,
-    });
+    try {
+      fs.copyFileSync(hostCredentials, sessionCredentials);
+      fs.chmodSync(sessionCredentials, 0o644);
+    } catch (err) {
+      logger.warn({ err }, 'Failed to sync credentials into session dir');
+    }
   }
 
   // Per-group IPC namespace: each group gets its own IPC directory

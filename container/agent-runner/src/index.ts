@@ -408,7 +408,8 @@ async function runQuery(
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
-        'mcp__notion__*'
+        'mcp__notion__*',
+        'mcp__notion-lotechni__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
