@@ -180,7 +180,11 @@ function buildVolumeMounts(
 
   // Mount host Claude credentials (MCP OAuth tokens) so containers can use
   // Notion and other MCP servers that require OAuth (e.g. mcp.notion.com).
-  const hostCredentials = path.join(os.homedir(), '.claude', '.credentials.json');
+  const hostCredentials = path.join(
+    os.homedir(),
+    '.claude',
+    '.credentials.json',
+  );
   if (fs.existsSync(hostCredentials)) {
     mounts.push({
       hostPath: hostCredentials,
