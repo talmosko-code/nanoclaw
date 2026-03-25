@@ -4,6 +4,7 @@
  */
 import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -147,6 +148,12 @@ function buildVolumeMounts(
             // https://code.claude.com/docs/en/memory#manage-auto-memory
             CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
           },
+          mcpServers: {
+            notion: {
+              type: 'http',
+              url: 'https://mcp.notion.com/mcp',
+            },
+          },
         },
         null,
         2,
@@ -170,6 +177,17 @@ function buildVolumeMounts(
     containerPath: '/home/node/.claude',
     readonly: false,
   });
+
+  // Mount host Claude credentials (MCP OAuth tokens) so containers can use
+  // Notion and other MCP servers that require OAuth (e.g. mcp.notion.com).
+  const hostCredentials = path.join(os.homedir(), '.claude', '.credentials.json');
+  if (fs.existsSync(hostCredentials)) {
+    mounts.push({
+      hostPath: hostCredentials,
+      containerPath: '/home/node/.claude/.credentials.json',
+      readonly: true,
+    });
+  }
 
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
