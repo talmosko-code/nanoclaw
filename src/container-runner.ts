@@ -131,6 +131,28 @@ function buildVolumeMounts(
   } catch {
     fs.chmodSync(groupSessionsDir, 0o777);
   }
+  // Derive mcpServers from the host's authenticated MCP OAuth entries so
+  // any server the user connects via Claude Code is automatically available
+  // in containers — no manual config needed.
+  const mcpServers: Record<string, { type: string; url: string }> = {};
+  const hostCredsPath = path.join(os.homedir(), '.claude', '.credentials.json');
+  if (fs.existsSync(hostCredsPath)) {
+    try {
+      const creds = JSON.parse(fs.readFileSync(hostCredsPath, 'utf-8'));
+      for (const entry of Object.values(
+        creds.mcpOAuth ?? {},
+      ) as Array<Record<string, unknown>>) {
+        const name = entry.serverName as string | undefined;
+        const url = entry.serverUrl as string | undefined;
+        if (name && url) {
+          mcpServers[name] = { type: 'http', url };
+        }
+      }
+    } catch {
+      // Ignore parse errors — containers will start without MCP
+    }
+  }
+
   // Always overwrite settings.json so MCP config changes take effect
   // without needing to manually update existing sessions.
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
@@ -149,16 +171,7 @@ function buildVolumeMounts(
           // https://code.claude.com/docs/en/memory#manage-auto-memory
           CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
         },
-        mcpServers: {
-          notion: {
-            type: 'http',
-            url: 'https://mcp.notion.com/mcp',
-          },
-          'notion-lotechni': {
-            type: 'http',
-            url: 'https://mcp.notion.com/mcp',
-          },
-        },
+        mcpServers,
       },
       null,
       2,
