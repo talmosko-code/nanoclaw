@@ -407,9 +407,7 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*',
-        'mcp__notion__*',
-        'mcp__notion-lotechni__*'
+        'mcp__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
