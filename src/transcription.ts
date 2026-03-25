@@ -33,8 +33,9 @@ async function transcribeWithLocalWhisper(
   const tmpFile = path.join(os.tmpdir(), `nanoclaw-voice-${msgId}.ogg`);
   try {
     fs.writeFileSync(tmpFile, audioBuffer);
+    const model = process.env.WHISPER_MODEL ?? 'medium';
     const { stdout } = await execAsync(
-      `"${pythonBin}" "${TRANSCRIBE_SCRIPT}" "${tmpFile}"`,
+      `"${pythonBin}" "${TRANSCRIBE_SCRIPT}" "${tmpFile}" --model "${model}"`,
       { timeout: 120_000 },
     );
     return stdout.trim() || null;
