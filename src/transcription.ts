@@ -1,54 +1,48 @@
+import { exec } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { promisify } from 'util';
+
 import { downloadMediaMessage } from '@whiskeysockets/baileys';
 import { WAMessage, WASocket } from '@whiskeysockets/baileys';
 
-import { readEnvFile } from './env.js';
+import { logger } from './logger.js';
 
-interface TranscriptionConfig {
-  model: string;
-  enabled: boolean;
-  fallbackMessage: string;
-}
+const execAsync = promisify(exec);
 
-const DEFAULT_CONFIG: TranscriptionConfig = {
-  model: 'whisper-1',
-  enabled: true,
-  fallbackMessage: '[Voice Message - transcription unavailable]',
-};
+const PROJECT_ROOT = path.resolve(import.meta.dirname, '..');
+const DEFAULT_WHISPER_VENV = path.join(PROJECT_ROOT, 'data', 'whisper-venv');
+const TRANSCRIBE_SCRIPT = path.join(PROJECT_ROOT, 'bin', 'transcribe.py');
 
-async function transcribeWithOpenAI(
+async function transcribeWithLocalWhisper(
   audioBuffer: Buffer,
-  config: TranscriptionConfig,
+  msgId: string,
 ): Promise<string | null> {
-  const env = readEnvFile(['OPENAI_API_KEY']);
-  const apiKey = env.OPENAI_API_KEY;
+  const venvPath = process.env.WHISPER_VENV_PATH ?? DEFAULT_WHISPER_VENV;
+  const pythonBin = path.join(venvPath, 'bin', 'python');
 
-  if (!apiKey) {
-    console.warn('OPENAI_API_KEY not set in .env');
+  if (!fs.existsSync(pythonBin)) {
+    logger.warn(
+      { venvPath },
+      'Whisper venv not found — voice transcription disabled',
+    );
     return null;
   }
 
+  const tmpFile = path.join(os.tmpdir(), `nanoclaw-voice-${msgId}.ogg`);
   try {
-    const openaiModule = await import('openai');
-    const OpenAI = openaiModule.default;
-    const toFile = openaiModule.toFile;
-
-    const openai = new OpenAI({ apiKey });
-
-    const file = await toFile(audioBuffer, 'voice.ogg', {
-      type: 'audio/ogg',
-    });
-
-    const transcription = await openai.audio.transcriptions.create({
-      file: file,
-      model: config.model,
-      response_format: 'text',
-    });
-
-    // When response_format is 'text', the API returns a plain string
-    return transcription as unknown as string;
+    fs.writeFileSync(tmpFile, audioBuffer);
+    const { stdout } = await execAsync(
+      `"${pythonBin}" "${TRANSCRIBE_SCRIPT}" "${tmpFile}"`,
+      { timeout: 120_000 },
+    );
+    return stdout.trim() || null;
   } catch (err) {
-    console.error('OpenAI transcription failed:', err);
+    logger.warn({ err }, 'Voice transcription failed');
     return null;
+  } finally {
+    fs.rmSync(tmpFile, { force: true });
   }
 }
 
@@ -56,12 +50,6 @@ export async function transcribeAudioMessage(
   msg: WAMessage,
   sock: WASocket,
 ): Promise<string | null> {
-  const config = DEFAULT_CONFIG;
-
-  if (!config.enabled) {
-    return config.fallbackMessage;
-  }
-
   try {
     const buffer = (await downloadMediaMessage(
       msg,
@@ -74,22 +62,22 @@ export async function transcribeAudioMessage(
     )) as Buffer;
 
     if (!buffer || buffer.length === 0) {
-      console.error('Failed to download audio message');
-      return config.fallbackMessage;
+      logger.error('Failed to download audio message');
+      return '[Voice Message - transcription unavailable]';
     }
 
-    console.log(`Downloaded audio message: ${buffer.length} bytes`);
-
-    const transcript = await transcribeWithOpenAI(buffer, config);
+    const msgId = msg.key.id ?? Date.now().toString();
+    const transcript = await transcribeWithLocalWhisper(buffer, msgId);
 
     if (!transcript) {
-      return config.fallbackMessage;
+      return '[Voice Message - transcription unavailable]';
     }
 
-    return transcript.trim();
+    logger.info({ chars: transcript.length }, 'Transcribed voice message');
+    return transcript;
   } catch (err) {
-    console.error('Transcription error:', err);
-    return config.fallbackMessage;
+    logger.error({ err }, 'Transcription error');
+    return '[Voice Message - transcription unavailable]';
   }
 }
 
