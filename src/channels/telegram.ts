@@ -117,6 +117,8 @@ export class TelegramChannel implements Channel {
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
   private botToken: string;
+  // Tracks the last message_thread_id per chat so replies go to the right topic
+  private lastThreadId: Map<string, number> = new Map();
 
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
@@ -193,6 +195,12 @@ export class TelegramChannel implements Channel {
       }
 
       const chatJid = `tg:${ctx.chat.id}`;
+      // Track forum topic thread for replies
+      if (ctx.message.message_thread_id !== undefined) {
+        this.lastThreadId.set(chatJid, ctx.message.message_thread_id);
+      } else {
+        this.lastThreadId.delete(chatJid);
+      }
       let content = ctx.message.text;
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -272,6 +280,12 @@ export class TelegramChannel implements Channel {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
+      // Track forum topic thread for replies
+      if (ctx.message?.message_thread_id !== undefined) {
+        this.lastThreadId.set(chatJid, ctx.message.message_thread_id);
+      } else {
+        this.lastThreadId.delete(chatJid);
+      }
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -307,6 +321,12 @@ export class TelegramChannel implements Channel {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
+      // Track forum topic thread for replies
+      if (ctx.message?.message_thread_id !== undefined) {
+        this.lastThreadId.set(chatJid, ctx.message.message_thread_id);
+      } else {
+        this.lastThreadId.delete(chatJid);
+      }
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -419,21 +439,24 @@ export class TelegramChannel implements Channel {
 
     try {
       const numericId = jid.replace(/^tg:/, '');
+      const threadId = this.lastThreadId.get(jid);
+      const threadOpts = threadId !== undefined ? { message_thread_id: threadId } : {};
 
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
       if (text.length <= MAX_LENGTH) {
-        await sendTelegramMessage(this.bot.api, numericId, text);
+        await sendTelegramMessage(this.bot.api, numericId, text, threadOpts);
       } else {
         for (let i = 0; i < text.length; i += MAX_LENGTH) {
           await sendTelegramMessage(
             this.bot.api,
             numericId,
             text.slice(i, i + MAX_LENGTH),
+            threadOpts,
           );
         }
       }
-      logger.info({ jid, length: text.length }, 'Telegram message sent');
+      logger.info({ jid, threadId, length: text.length }, 'Telegram message sent');
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
     }
@@ -459,7 +482,9 @@ export class TelegramChannel implements Channel {
     if (!this.bot || !isTyping) return;
     try {
       const numericId = jid.replace(/^tg:/, '');
-      await this.bot.api.sendChatAction(numericId, 'typing');
+      const threadId = this.lastThreadId.get(jid);
+      const opts = threadId !== undefined ? { message_thread_id: threadId } : {};
+      await this.bot.api.sendChatAction(numericId, 'typing', opts);
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');
     }
