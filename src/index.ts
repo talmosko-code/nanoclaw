@@ -38,6 +38,7 @@ import {
   setRegisteredGroup,
   setRouterState,
   setSession,
+  deleteSession,
   storeChatMetadata,
   storeMessage,
 } from './db.js';
@@ -331,6 +332,19 @@ async function runAgent(
     }
 
     if (output.status === 'error') {
+      // Stale session (e.g. after service restart) — clear and retry once without it
+      if (
+        output.error?.includes('No conversation found with session ID') &&
+        sessions[group.folder]
+      ) {
+        logger.warn(
+          { group: group.name },
+          'Stale session ID detected — clearing and retrying',
+        );
+        delete sessions[group.folder];
+        deleteSession(group.folder);
+        return runAgent(group, prompt, chatJid, onOutput);
+      }
       logger.error(
         { group: group.name, error: output.error },
         'Container agent error',

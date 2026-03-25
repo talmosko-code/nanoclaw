@@ -122,6 +122,14 @@ function buildVolumeMounts(
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
+  // Ensure the container's node user (uid 1000) can write into this directory.
+  // When the host runs as root, mkdirSync creates a root-owned dir (755) which
+  // blocks writes from uid 1000 inside the container.
+  try {
+    fs.chownSync(groupSessionsDir, 1000, 1000);
+  } catch {
+    fs.chmodSync(groupSessionsDir, 0o777);
+  }
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(
@@ -168,7 +176,15 @@ function buildVolumeMounts(
   const groupIpcDir = resolveGroupIpcPath(group.folder);
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+  const inputDir = path.join(groupIpcDir, 'input');
+  fs.mkdirSync(inputDir, { recursive: true });
+  // Container runs as node (uid=1000) and needs to delete processed input files
+  try {
+    fs.chownSync(inputDir, 1000, 1000);
+  } catch {
+    // chown may fail if not root; fall back to world-writable
+    fs.chmodSync(inputDir, 0o777);
+  }
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
@@ -192,6 +208,12 @@ function buildVolumeMounts(
   );
   if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
     fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  }
+  // Ensure container's node user (uid 1000) can write here for agent customization
+  try {
+    fs.chownSync(groupAgentRunnerDir, 1000, 1000);
+  } catch {
+    fs.chmodSync(groupAgentRunnerDir, 0o777);
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,
@@ -274,6 +296,12 @@ export async function runContainerAgent(
 
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
+  // Ensure container's node user (uid 1000) can write group files (CLAUDE.md etc.)
+  try {
+    fs.chownSync(groupDir, 1000, 1000);
+  } catch {
+    fs.chmodSync(groupDir, 0o777);
+  }
 
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
