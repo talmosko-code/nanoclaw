@@ -9,6 +9,15 @@ import {
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
+
+function matchesTrigger(content: string, groupTrigger?: string): boolean {
+  if (TRIGGER_PATTERN.test(content)) return true;
+  if (groupTrigger) {
+    const escaped = groupTrigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`^${escaped}\\b`, 'i').test(content);
+  }
+  return false;
+}
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
@@ -182,7 +191,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
       (m) =>
-        TRIGGER_PATTERN.test(m.content.trim()) &&
+        matchesTrigger(m.content.trim(), group.trigger) &&
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
     if (!hasTrigger) return true;
@@ -423,7 +432,7 @@ async function startMessageLoop(): Promise<void> {
             const allowlistCfg = loadSenderAllowlist();
             const hasTrigger = groupMessages.some(
               (m) =>
-                TRIGGER_PATTERN.test(m.content.trim()) &&
+                matchesTrigger(m.content.trim(), group.trigger) &&
                 (m.is_from_me ||
                   isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
             );
