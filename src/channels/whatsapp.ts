@@ -6,6 +6,7 @@ import makeWASocket, {
   Browsers,
   DisconnectReason,
   WASocket,
+  downloadMediaMessage,
   fetchLatestWaWebVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
@@ -16,6 +17,7 @@ import {
   ASSISTANT_NAME,
   STORE_DIR,
 } from '../config.js';
+import { resolveGroupIpcPath } from '../group-folder.js';
 import { getLastGroupSync, setLastGroupSync, updateChatName } from '../db.js';
 import { logger } from '../logger.js';
 import { isVoiceMessage, transcribeAudioMessage } from '../transcription.js';
@@ -197,6 +199,7 @@ export class WhatsAppChannel implements Channel {
         // Only deliver full message for registered groups
         const groups = this.opts.registeredGroups();
         if (groups[chatJid]) {
+          const documentMsg = msg.message?.documentMessage;
           const content =
             msg.message?.conversation ||
             msg.message?.extendedTextMessage?.text ||
@@ -205,8 +208,8 @@ export class WhatsAppChannel implements Channel {
             '';
 
           // Skip protocol messages with no text content (encryption keys, read receipts, etc.)
-          // but allow voice messages through for transcription
-          if (!content && !isVoiceMessage(msg)) continue;
+          // but allow voice messages and documents through
+          if (!content && !isVoiceMessage(msg) && !documentMsg) continue;
 
           const sender = msg.key.participant || msg.key.remoteJid || '';
           const senderName = msg.pushName || sender.split('@')[0];
@@ -237,6 +240,40 @@ export class WhatsAppChannel implements Channel {
             } catch (err) {
               logger.error({ err }, 'Voice transcription error');
               finalContent = '[Voice Message - transcription failed]';
+            }
+          }
+
+          // Download and save document attachments to the IPC files directory
+          if (documentMsg) {
+            const docName = documentMsg.fileName || 'attachment';
+            const docCaption = documentMsg.caption
+              ? `\n${documentMsg.caption}`
+              : '';
+            try {
+              const groupIpcDir = resolveGroupIpcPath(groups[chatJid].folder);
+              const filesDir = path.join(groupIpcDir, 'files');
+              fs.mkdirSync(filesDir, { recursive: true });
+
+              const buf = (await downloadMediaMessage(
+                msg,
+                'buffer',
+                {},
+                {
+                  logger: console as any,
+                  reuploadRequest: this.sock.updateMediaMessage,
+                },
+              )) as Buffer;
+
+              const safeFilename = `${msg.key.id}-${docName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+              fs.writeFileSync(path.join(filesDir, safeFilename), buf);
+              finalContent = `[File: ${docName} at /workspace/ipc/files/${safeFilename}]${docCaption}`;
+              logger.info(
+                { chatJid, filename: safeFilename, size: buf.length },
+                'WhatsApp document saved',
+              );
+            } catch (err) {
+              logger.error({ err, chatJid }, 'Failed to download WhatsApp document');
+              finalContent = `[File: ${docName} - download failed]${docCaption}`;
             }
           }
 
