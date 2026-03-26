@@ -139,9 +139,9 @@ function buildVolumeMounts(
   if (fs.existsSync(hostCredsPath)) {
     try {
       const creds = JSON.parse(fs.readFileSync(hostCredsPath, 'utf-8'));
-      for (const entry of Object.values(
-        creds.mcpOAuth ?? {},
-      ) as Array<Record<string, unknown>>) {
+      for (const entry of Object.values(creds.mcpOAuth ?? {}) as Array<
+        Record<string, unknown>
+      >) {
         const name = entry.serverName as string | undefined;
         const url = entry.serverUrl as string | undefined;
         if (name && url) {
@@ -228,6 +228,14 @@ function buildVolumeMounts(
   } catch {
     // chown may fail if not root; fall back to world-writable
     fs.chmodSync(inputDir, 0o777);
+  }
+  // Files directory: incoming attachments downloaded from WhatsApp/Telegram
+  const filesDir = path.join(groupIpcDir, 'files');
+  fs.mkdirSync(filesDir, { recursive: true });
+  try {
+    fs.chownSync(filesDir, 1000, 1000);
+  } catch {
+    fs.chmodSync(filesDir, 0o777);
   }
   mounts.push({
     hostPath: groupIpcDir,

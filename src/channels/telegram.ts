@@ -7,6 +7,7 @@ import { Api, Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
+import { resolveGroupIpcPath } from '../group-folder.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -378,9 +379,60 @@ export class TelegramChannel implements Channel {
       });
     });
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
-    this.bot.on('message:document', (ctx) => {
-      const name = ctx.message.document?.file_name || 'file';
-      storeNonText(ctx, `[Document: ${name}]`);
+    this.bot.on('message:document', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      if (ctx.message?.message_thread_id !== undefined) {
+        this.lastThreadId.set(chatJid, ctx.message.message_thread_id);
+      } else {
+        this.lastThreadId.delete(chatJid);
+      }
+
+      const timestamp = new Date(ctx.message.date * 1000).toISOString();
+      const senderName =
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
+      const msgId = ctx.message.message_id.toString();
+      const docName = ctx.message.document?.file_name || 'file';
+      const caption = ctx.message.caption ? `\n${ctx.message.caption}` : '';
+
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+
+      let content = `[File: ${docName} - download failed]${caption}`;
+      try {
+        const file = await ctx.api.getFile(ctx.message.document!.file_id);
+        if (file.file_path) {
+          const buf = await downloadTelegramFile(this.botToken, file.file_path);
+          const groupIpcDir = resolveGroupIpcPath(group.folder);
+          const filesDir = path.join(groupIpcDir, 'files');
+          fs.mkdirSync(filesDir, { recursive: true });
+          const safeFilename = `${msgId}-${docName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+          fs.writeFileSync(path.join(filesDir, safeFilename), buf);
+          content = `[File: ${docName} at /workspace/ipc/files/${safeFilename}]${caption}`;
+          logger.info(
+            { chatJid, filename: safeFilename, size: buf.length },
+            'Telegram document saved',
+          );
+        }
+      } catch (err) {
+        logger.warn({ err, chatJid }, 'Failed to download Telegram document');
+      }
+
+      this.opts.onMessage(chatJid, {
+        id: msgId,
+        chat_jid: chatJid,
+        sender: ctx.from?.id?.toString() || '',
+        sender_name: senderName,
+        content,
+        timestamp,
+        is_from_me: false,
+      });
     });
     this.bot.on('message:sticker', (ctx) => {
       const emoji = ctx.message.sticker?.emoji || '';
@@ -440,7 +492,8 @@ export class TelegramChannel implements Channel {
     try {
       const numericId = jid.replace(/^tg:/, '');
       const threadId = this.lastThreadId.get(jid);
-      const threadOpts = threadId !== undefined ? { message_thread_id: threadId } : {};
+      const threadOpts =
+        threadId !== undefined ? { message_thread_id: threadId } : {};
 
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
@@ -456,7 +509,10 @@ export class TelegramChannel implements Channel {
           );
         }
       }
-      logger.info({ jid, threadId, length: text.length }, 'Telegram message sent');
+      logger.info(
+        { jid, threadId, length: text.length },
+        'Telegram message sent',
+      );
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
     }
@@ -483,7 +539,8 @@ export class TelegramChannel implements Channel {
     try {
       const numericId = jid.replace(/^tg:/, '');
       const threadId = this.lastThreadId.get(jid);
-      const opts = threadId !== undefined ? { message_thread_id: threadId } : {};
+      const opts =
+        threadId !== undefined ? { message_thread_id: threadId } : {};
       await this.bot.api.sendChatAction(numericId, 'typing', opts);
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');
