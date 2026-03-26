@@ -80,6 +80,15 @@ function buildVolumeMounts(
     // Mount groups/ as rw so agents can write their CLAUDE.md files.
     // This shadows the ro project mount for just the groups/ subtree.
     fs.mkdirSync(GROUPS_DIR, { recursive: true });
+    // Chown all immediate subdirs (including global/) so uid 1000 can write into them.
+    try {
+      for (const entry of fs.readdirSync(GROUPS_DIR)) {
+        const d = path.join(GROUPS_DIR, entry);
+        if (fs.statSync(d).isDirectory()) {
+          try { fs.chownSync(d, 1000, 1000); } catch { /* best-effort */ }
+        }
+      }
+    } catch { /* best-effort */ }
     mounts.push({
       hostPath: GROUPS_DIR,
       containerPath: '/workspace/project/groups',
