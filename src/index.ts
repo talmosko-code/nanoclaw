@@ -110,8 +110,16 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   registeredGroups[jid] = group;
   setRegisteredGroup(jid, group);
 
-  // Create group folder
-  fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
+  // Create group folder and chown so container's node user (uid 1000) can write
+  const logsDir = path.join(groupDir, 'logs');
+  fs.mkdirSync(logsDir, { recursive: true });
+  for (const d of [groupDir, logsDir]) {
+    try {
+      fs.chownSync(d, 1000, 1000);
+    } catch {
+      fs.chmodSync(d, 0o777);
+    }
+  }
 
   logger.info(
     { jid, name: group.name, folder: group.folder },
