@@ -77,6 +77,15 @@ function buildVolumeMounts(
       readonly: true,
     });
 
+    // Mount groups/ as rw so agents can write their CLAUDE.md files.
+    // This shadows the ro project mount for just the groups/ subtree.
+    fs.mkdirSync(GROUPS_DIR, { recursive: true });
+    mounts.push({
+      hostPath: GROUPS_DIR,
+      containerPath: '/workspace/project/groups',
+      readonly: false,
+    });
+
     // Shadow .env so the agent cannot read secrets from the mounted project root.
     // Credentials are injected by the credential proxy, never exposed to containers.
     const envFile = path.join(projectRoot, '.env');
