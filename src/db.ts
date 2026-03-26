@@ -380,10 +380,10 @@ export function getMessagesSince(
 export function getLastThreadId(chatJid: string): number | undefined {
   const row = db
     .prepare(
-      `SELECT thread_id FROM messages WHERE chat_jid = ? AND is_bot_message = 0 AND thread_id IS NOT NULL ORDER BY timestamp DESC LIMIT 1`,
+      `SELECT thread_id FROM messages WHERE chat_jid = ? AND is_bot_message = 0 ORDER BY timestamp DESC LIMIT 1`,
     )
-    .get(chatJid) as { thread_id: number } | undefined;
-  return row?.thread_id;
+    .get(chatJid) as { thread_id: number | null } | undefined;
+  return row?.thread_id ?? undefined;
 }
 
 export function createTask(
