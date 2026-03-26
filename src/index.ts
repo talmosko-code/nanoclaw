@@ -14,7 +14,7 @@ function matchesTrigger(content: string, groupTrigger?: string): boolean {
   if (TRIGGER_PATTERN.test(content)) return true;
   if (groupTrigger) {
     const escaped = groupTrigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`^${escaped}\\b`, 'i').test(content);
+    return new RegExp(`^${escaped}(?:\\s|$)`, 'i').test(content);
   }
   return false;
 }
