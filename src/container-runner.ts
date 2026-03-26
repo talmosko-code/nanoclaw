@@ -218,8 +218,15 @@ function buildVolumeMounts(
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
-  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
+  for (const subdir of ['messages', 'tasks']) {
+    const d = path.join(groupIpcDir, subdir);
+    fs.mkdirSync(d, { recursive: true });
+    try {
+      fs.chownSync(d, 1000, 1000);
+    } catch {
+      fs.chmodSync(d, 0o777);
+    }
+  }
   const inputDir = path.join(groupIpcDir, 'input');
   fs.mkdirSync(inputDir, { recursive: true });
   // Container runs as node (uid=1000) and needs to delete processed input files
@@ -385,6 +392,11 @@ export async function runContainerAgent(
 
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
+  try {
+    fs.chownSync(logsDir, 1000, 1000);
+  } catch {
+    fs.chmodSync(logsDir, 0o777);
+  }
 
   return new Promise((resolve) => {
     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
