@@ -6,6 +6,7 @@ import path from 'path';
 import { Api, Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { getLastThreadId } from '../db.js';
 import { readEnvFile } from '../env.js';
 import { resolveGroupIpcPath } from '../group-folder.js';
 import { logger } from '../logger.js';
@@ -118,8 +119,6 @@ export class TelegramChannel implements Channel {
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
   private botToken: string;
-  // Tracks the last message_thread_id per chat so replies go to the right topic
-  private lastThreadId: Map<string, number> = new Map();
 
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
@@ -196,12 +195,7 @@ export class TelegramChannel implements Channel {
       }
 
       const chatJid = `tg:${ctx.chat.id}`;
-      // Track forum topic thread for replies
-      if (ctx.message.message_thread_id !== undefined) {
-        this.lastThreadId.set(chatJid, ctx.message.message_thread_id);
-      } else {
-        this.lastThreadId.delete(chatJid);
-      }
+      const threadId = ctx.message.message_thread_id;
       let content = ctx.message.text;
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -268,10 +262,11 @@ export class TelegramChannel implements Channel {
         content,
         timestamp,
         is_from_me: false,
+        thread_id: threadId,
       });
 
       logger.info(
-        { chatJid, chatName, sender: senderName },
+        { chatJid, chatName, sender: senderName, threadId },
         'Telegram message stored',
       );
     });
@@ -281,13 +276,7 @@ export class TelegramChannel implements Channel {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
-      // Track forum topic thread for replies
-      if (ctx.message?.message_thread_id !== undefined) {
-        this.lastThreadId.set(chatJid, ctx.message.message_thread_id);
-      } else {
-        this.lastThreadId.delete(chatJid);
-      }
-
+      const threadId = ctx.message?.message_thread_id as number | undefined;
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
         ctx.from?.first_name ||
@@ -313,6 +302,7 @@ export class TelegramChannel implements Channel {
         content: `${placeholder}${caption}`,
         timestamp,
         is_from_me: false,
+        thread_id: threadId,
       });
     };
 
@@ -322,13 +312,7 @@ export class TelegramChannel implements Channel {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
-      // Track forum topic thread for replies
-      if (ctx.message?.message_thread_id !== undefined) {
-        this.lastThreadId.set(chatJid, ctx.message.message_thread_id);
-      } else {
-        this.lastThreadId.delete(chatJid);
-      }
-
+      const threadId = ctx.message?.message_thread_id as number | undefined;
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
         ctx.from?.first_name ||
@@ -376,6 +360,7 @@ export class TelegramChannel implements Channel {
         content,
         timestamp,
         is_from_me: false,
+        thread_id: threadId,
       });
     });
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
@@ -384,12 +369,7 @@ export class TelegramChannel implements Channel {
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
 
-      if (ctx.message?.message_thread_id !== undefined) {
-        this.lastThreadId.set(chatJid, ctx.message.message_thread_id);
-      } else {
-        this.lastThreadId.delete(chatJid);
-      }
-
+      const threadId = ctx.message?.message_thread_id as number | undefined;
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
         ctx.from?.first_name ||
@@ -402,7 +382,13 @@ export class TelegramChannel implements Channel {
 
       const isGroup =
         ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-      this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        undefined,
+        'telegram',
+        isGroup,
+      );
 
       let content = `[File: ${docName} - download failed]${caption}`;
       try {
@@ -432,6 +418,7 @@ export class TelegramChannel implements Channel {
         content,
         timestamp,
         is_from_me: false,
+        thread_id: threadId,
       });
     });
     this.bot.on('message:sticker', (ctx) => {
@@ -491,7 +478,7 @@ export class TelegramChannel implements Channel {
 
     try {
       const numericId = jid.replace(/^tg:/, '');
-      const threadId = this.lastThreadId.get(jid);
+      const threadId = getLastThreadId(jid);
       const threadOpts =
         threadId !== undefined ? { message_thread_id: threadId } : {};
 
@@ -538,7 +525,7 @@ export class TelegramChannel implements Channel {
     if (!this.bot || !isTyping) return;
     try {
       const numericId = jid.replace(/^tg:/, '');
-      const threadId = this.lastThreadId.get(jid);
+      const threadId = getLastThreadId(jid);
       const opts =
         threadId !== undefined ? { message_thread_id: threadId } : {};
       await this.bot.api.sendChatAction(numericId, 'typing', opts);
