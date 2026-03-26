@@ -365,8 +365,16 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
   // Ensure container's node user (uid 1000) can write group files (CLAUDE.md etc.)
+  // chownSync only sets the directory itself; also fix any existing files inside.
   try {
     fs.chownSync(groupDir, 1000, 1000);
+    for (const entry of fs.readdirSync(groupDir)) {
+      try {
+        fs.chownSync(path.join(groupDir, entry), 1000, 1000);
+      } catch {
+        // best-effort; ignore individual failures
+      }
+    }
   } catch {
     fs.chmodSync(groupDir, 0o777);
   }
