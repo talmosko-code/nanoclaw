@@ -83,5 +83,7 @@ export async function transcribeAudioMessage(
 }
 
 export function isVoiceMessage(msg: WAMessage): boolean {
-  return msg.message?.audioMessage?.ptt === true;
+  // ptt=true for recorded voice notes; ptt=false/undefined for forwarded audio.
+  // Treat any audioMessage as a voice note so forwarded voice notes are transcribed.
+  return !!msg.message?.audioMessage;
 }
