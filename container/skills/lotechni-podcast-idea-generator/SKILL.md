@@ -56,7 +56,9 @@ Using the raw input + RSS learnings + show identity above, generate:
 Use the **notion-lotechni** MCP to create a page in the Episode Ideas DB.
 
 - **DB data source ID:** `collection://1be5b6be-c8d3-496f-9f86-8e27697b3b56`
-- **DB URL:** `https://www.notion.so/c7bf289355824a22ae887bf0a3148dc7`
+- **DB URL:** `https://www.notion.so/c7bf289355824a22ae887bf0a3148dc7?v=7ba5ae8363b34956adbe499f01891b9c`
+
+⚠️ **חשוב:** שמור **אך ורק** ב-DB הזה (Episode Ideas). אל תשמור ב-Episodes – זה ארכיב בלבד.
 
 Create the page with all 8 properties filled + the ליינאפ מוצע as page body content.
 

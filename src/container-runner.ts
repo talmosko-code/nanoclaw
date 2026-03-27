@@ -85,10 +85,16 @@ function buildVolumeMounts(
       for (const entry of fs.readdirSync(GROUPS_DIR)) {
         const d = path.join(GROUPS_DIR, entry);
         if (fs.statSync(d).isDirectory()) {
-          try { fs.chownSync(d, 1000, 1000); } catch { /* best-effort */ }
+          try {
+            fs.chownSync(d, 1000, 1000);
+          } catch {
+            /* best-effort */
+          }
         }
       }
-    } catch { /* best-effort */ }
+    } catch {
+      /* best-effort */
+    }
     mounts.push({
       hostPath: GROUPS_DIR,
       containerPath: '/workspace/project/groups',
@@ -206,6 +212,18 @@ function buildVolumeMounts(
       const dstDir = path.join(skillsDst, skillDir);
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
+    // chown the entire skills tree so the container's node user can edit skill files
+    try {
+      const chownTree = (dir: string) => {
+        fs.chownSync(dir, 1000, 1000);
+        for (const entry of fs.readdirSync(dir)) {
+          const full = path.join(dir, entry);
+          fs.chownSync(full, 1000, 1000);
+          if (fs.statSync(full).isDirectory()) chownTree(full);
+        }
+      };
+      chownTree(skillsDst);
+    } catch { /* best-effort */ }
   }
   mounts.push({
     hostPath: groupSessionsDir,
