@@ -382,15 +382,9 @@ function buildContainerArgs(
   // Use readEnvFile (not process.env) so runtime .env changes take effect
   // without restarting — same pattern as the credential proxy.
   const envVars = readEnvFile([
-    'LLM_PROVIDER',
-    'OPENROUTER_MODEL',
     'ANTHROPIC_MODEL',
   ]);
-  const llmProvider = envVars.LLM_PROVIDER || 'anthropic';
-  const modelToUse =
-    llmProvider === 'openrouter'
-      ? envVars.OPENROUTER_MODEL || 'deepseek/deepseek-v3.2'
-      : envVars.ANTHROPIC_MODEL;
+  const modelToUse = envVars.ANTHROPIC_MODEL;
 
   if (modelToUse) {
     // Set the model for the SDK to use
