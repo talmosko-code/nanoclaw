@@ -27,6 +27,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -223,7 +224,9 @@ function buildVolumeMounts(
         }
       };
       chownTree(skillsDst);
-    } catch { /* best-effort */ }
+    } catch {
+      /* best-effort */
+    }
   }
   mounts.push({
     hostPath: groupSessionsDir,
@@ -353,6 +356,23 @@ function buildContainerArgs(
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Pass model override for OpenRouter or custom models
+  // Use readEnvFile (not process.env) so runtime .env changes take effect
+  // without restarting — same pattern as the credential proxy.
+  const envVars = readEnvFile(['LLM_PROVIDER', 'OPENROUTER_MODEL', 'ANTHROPIC_MODEL']);
+  const llmProvider = envVars.LLM_PROVIDER || 'anthropic';
+  const modelToUse =
+    llmProvider === 'openrouter'
+      ? envVars.OPENROUTER_MODEL || 'deepseek/deepseek-v3.2'
+      : envVars.ANTHROPIC_MODEL;
+
+  if (modelToUse) {
+    // Set the model for the SDK to use
+    args.push('-e', `ANTHROPIC_MODEL=${modelToUse}`);
+    // Also set default sonnet model since that's what SDK often uses
+    args.push('-e', `ANTHROPIC_DEFAULT_SONNET_MODEL=${modelToUse}`);
   }
 
   // Runtime-specific args for host gateway resolution
