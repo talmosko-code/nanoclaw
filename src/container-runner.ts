@@ -381,9 +381,7 @@ function buildContainerArgs(
   // Pass model override for OpenRouter or custom models
   // Use readEnvFile (not process.env) so runtime .env changes take effect
   // without restarting — same pattern as the credential proxy.
-  const envVars = readEnvFile([
-    'ANTHROPIC_MODEL',
-  ]);
+  const envVars = readEnvFile(['ANTHROPIC_MODEL']);
   const modelToUse = envVars.ANTHROPIC_MODEL;
 
   if (modelToUse) {
