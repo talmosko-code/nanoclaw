@@ -2,7 +2,7 @@
  * Container Runner for NanoClaw
  * Spawns agent execution in containers and handles IPC
  */
-import { ChildProcess, exec, spawn } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -43,6 +43,7 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  script?: string;
 }
 
 export interface ContainerOutput {
@@ -154,7 +155,9 @@ function buildVolumeMounts(
   try {
     fs.chownSync(groupSessionsDir, 1000, 1000);
   } catch {
-    fs.chmodSync(groupSessionsDir, 0o777);
+    if (fs.existsSync(groupSessionsDir)) {
+      fs.chmodSync(groupSessionsDir, 0o777);
+    }
   }
   // Derive mcpServers from the host's authenticated MCP OAuth entries so
   // any server the user connects via Claude Code is automatically available
@@ -263,7 +266,9 @@ function buildVolumeMounts(
     try {
       fs.chownSync(d, 1000, 1000);
     } catch {
-      fs.chmodSync(d, 0o777);
+      if (fs.existsSync(d)) {
+        fs.chmodSync(d, 0o777);
+      }
     }
   }
   const inputDir = path.join(groupIpcDir, 'input');
@@ -273,7 +278,9 @@ function buildVolumeMounts(
     fs.chownSync(inputDir, 1000, 1000);
   } catch {
     // chown may fail if not root; fall back to world-writable
-    fs.chmodSync(inputDir, 0o777);
+    if (fs.existsSync(inputDir)) {
+      fs.chmodSync(inputDir, 0o777);
+    }
   }
   // Files directory: incoming attachments downloaded from WhatsApp/Telegram
   const filesDir = path.join(groupIpcDir, 'files');
@@ -281,7 +288,9 @@ function buildVolumeMounts(
   try {
     fs.chownSync(filesDir, 1000, 1000);
   } catch {
-    fs.chmodSync(filesDir, 0o777);
+    if (fs.existsSync(filesDir)) {
+      fs.chmodSync(filesDir, 0o777);
+    }
   }
   mounts.push({
     hostPath: groupIpcDir,
@@ -304,14 +313,25 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  if (fs.existsSync(agentRunnerSrc)) {
+    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
+    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
+    const needsCopy =
+      !fs.existsSync(groupAgentRunnerDir) ||
+      !fs.existsSync(cachedIndex) ||
+      (fs.existsSync(srcIndex) &&
+        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
+    if (needsCopy) {
+      fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+    }
   }
   // Ensure container's node user (uid 1000) can write here for agent customization
   try {
     fs.chownSync(groupAgentRunnerDir, 1000, 1000);
   } catch {
-    fs.chmodSync(groupAgentRunnerDir, 0o777);
+    if (fs.existsSync(groupAgentRunnerDir)) {
+      fs.chmodSync(groupAgentRunnerDir, 0o777);
+    }
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,
@@ -361,7 +381,11 @@ function buildContainerArgs(
   // Pass model override for OpenRouter or custom models
   // Use readEnvFile (not process.env) so runtime .env changes take effect
   // without restarting — same pattern as the credential proxy.
-  const envVars = readEnvFile(['LLM_PROVIDER', 'OPENROUTER_MODEL', 'ANTHROPIC_MODEL']);
+  const envVars = readEnvFile([
+    'LLM_PROVIDER',
+    'OPENROUTER_MODEL',
+    'ANTHROPIC_MODEL',
+  ]);
   const llmProvider = envVars.LLM_PROVIDER || 'anthropic';
   const modelToUse =
     llmProvider === 'openrouter'
@@ -423,7 +447,9 @@ export async function runContainerAgent(
       }
     }
   } catch {
-    fs.chmodSync(groupDir, 0o777);
+    if (fs.existsSync(groupDir)) {
+      fs.chmodSync(groupDir, 0o777);
+    }
   }
 
   const mounts = buildVolumeMounts(group, input.isMain);
@@ -459,7 +485,9 @@ export async function runContainerAgent(
   try {
     fs.chownSync(logsDir, 1000, 1000);
   } catch {
-    fs.chmodSync(logsDir, 0o777);
+    if (fs.existsSync(logsDir)) {
+      fs.chmodSync(logsDir, 0o777);
+    }
   }
 
   return new Promise((resolve) => {
@@ -569,15 +597,15 @@ export async function runContainerAgent(
         { group: group.name, containerName },
         'Container timeout, stopping gracefully',
       );
-      exec(stopContainer(containerName), { timeout: 15000 }, (err) => {
-        if (err) {
-          logger.warn(
-            { group: group.name, containerName, err },
-            'Graceful stop failed, force killing',
-          );
-          container.kill('SIGKILL');
-        }
-      });
+      try {
+        stopContainer(containerName);
+      } catch (err) {
+        logger.warn(
+          { group: group.name, containerName, err },
+          'Graceful stop failed, force killing',
+        );
+        container.kill('SIGKILL');
+      }
     };
 
     let timeout = setTimeout(killOnTimeout, timeoutMs);
@@ -815,6 +843,7 @@ export function writeTasksSnapshot(
     id: string;
     groupFolder: string;
     prompt: string;
+    script?: string | null;
     schedule_type: string;
     schedule_value: string;
     status: string;
