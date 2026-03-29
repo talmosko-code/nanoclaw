@@ -32,6 +32,7 @@ groups/whatsapp_shopping/*
 .DS_Store
 
 # IDE
+.cursor/
 .idea/
 .vscode/
 
