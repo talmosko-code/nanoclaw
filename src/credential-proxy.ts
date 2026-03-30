@@ -53,42 +53,108 @@ interface ProviderEntry {
  *   OPENCODE_PROVIDER_API_KEY_ENV=CUSTOM_API_KEY
  */
 const PROVIDER_REGISTRY: Record<string, ProviderEntry> = {
-  anthropic:     { upstream: 'https://api.anthropic.com',                    auth: 'x-api-key', envKey: 'ANTHROPIC_API_KEY' },
-  openai:        { upstream: 'https://api.openai.com/v1',                    auth: 'bearer',    envKey: 'OPENAI_API_KEY' },
-  openrouter:    { upstream: 'https://openrouter.ai/api/v1',                 auth: 'bearer',    envKey: 'OPENROUTER_API_KEY' },
-  google:        { upstream: 'https://generativelanguage.googleapis.com',    auth: 'goog-key',  envKey: 'GOOGLE_GENERATIVE_AI_API_KEY' },
-  deepseek:      { upstream: 'https://api.deepseek.com/v1',                  auth: 'bearer',    envKey: 'DEEPSEEK_API_KEY' },
-  xai:           { upstream: 'https://api.x.ai/v1',                         auth: 'bearer',    envKey: 'XAI_API_KEY' },
-  mistral:       { upstream: 'https://api.mistral.ai/v1',                   auth: 'bearer',    envKey: 'MISTRAL_API_KEY' },
-  groq:          { upstream: 'https://api.groq.com/openai/v1',              auth: 'bearer',    envKey: 'GROQ_API_KEY' },
-  together:      { upstream: 'https://api.together.xyz/v1',                 auth: 'bearer',    envKey: 'TOGETHER_API_KEY' },
-  fireworks:     { upstream: 'https://api.fireworks.ai/inference/v1',       auth: 'bearer',    envKey: 'FIREWORKS_API_KEY' },
-  cohere:        { upstream: 'https://api.cohere.ai/v1',                    auth: 'bearer',    envKey: 'COHERE_API_KEY' },
-  perplexity:    { upstream: 'https://api.perplexity.ai',                   auth: 'bearer',    envKey: 'PERPLEXITY_API_KEY' },
-  cerebras:      { upstream: 'https://api.cerebras.ai/v1',                  auth: 'bearer',    envKey: 'CEREBRAS_API_KEY' },
-  sambanova:     { upstream: 'https://api.sambanova.ai/v1',                 auth: 'bearer',    envKey: 'SAMBANOVA_API_KEY' },
+  anthropic: {
+    upstream: 'https://api.anthropic.com',
+    auth: 'x-api-key',
+    envKey: 'ANTHROPIC_API_KEY',
+  },
+  openai: {
+    upstream: 'https://api.openai.com/v1',
+    auth: 'bearer',
+    envKey: 'OPENAI_API_KEY',
+  },
+  openrouter: {
+    upstream: 'https://openrouter.ai/api/v1',
+    auth: 'bearer',
+    envKey: 'OPENROUTER_API_KEY',
+  },
+  google: {
+    upstream: 'https://generativelanguage.googleapis.com',
+    auth: 'goog-key',
+    envKey: 'GOOGLE_GENERATIVE_AI_API_KEY',
+  },
+  deepseek: {
+    upstream: 'https://api.deepseek.com/v1',
+    auth: 'bearer',
+    envKey: 'DEEPSEEK_API_KEY',
+  },
+  xai: {
+    upstream: 'https://api.x.ai/v1',
+    auth: 'bearer',
+    envKey: 'XAI_API_KEY',
+  },
+  mistral: {
+    upstream: 'https://api.mistral.ai/v1',
+    auth: 'bearer',
+    envKey: 'MISTRAL_API_KEY',
+  },
+  groq: {
+    upstream: 'https://api.groq.com/openai/v1',
+    auth: 'bearer',
+    envKey: 'GROQ_API_KEY',
+  },
+  together: {
+    upstream: 'https://api.together.xyz/v1',
+    auth: 'bearer',
+    envKey: 'TOGETHER_API_KEY',
+  },
+  fireworks: {
+    upstream: 'https://api.fireworks.ai/inference/v1',
+    auth: 'bearer',
+    envKey: 'FIREWORKS_API_KEY',
+  },
+  cohere: {
+    upstream: 'https://api.cohere.ai/v1',
+    auth: 'bearer',
+    envKey: 'COHERE_API_KEY',
+  },
+  perplexity: {
+    upstream: 'https://api.perplexity.ai',
+    auth: 'bearer',
+    envKey: 'PERPLEXITY_API_KEY',
+  },
+  cerebras: {
+    upstream: 'https://api.cerebras.ai/v1',
+    auth: 'bearer',
+    envKey: 'CEREBRAS_API_KEY',
+  },
+  sambanova: {
+    upstream: 'https://api.sambanova.ai/v1',
+    auth: 'bearer',
+    envKey: 'SAMBANOVA_API_KEY',
+  },
 };
 
 /** Resolve provider entry for AGENT_RUNNER=opencode mode. */
-function resolveOcProvider(secrets: Record<string, string | undefined>): ProviderEntry | null {
+function resolveOcProvider(
+  secrets: Record<string, string | undefined>,
+): ProviderEntry | null {
   const provider = secrets.OPENCODE_PROVIDER;
   if (!provider || provider === 'anthropic') return null; // handled by existing anthropic logic
 
   // Env-var overrides take precedence (escape hatch for unlisted providers)
   const upstreamOverride = secrets.OPENCODE_PROVIDER_UPSTREAM_URL;
-  const authOverride = secrets.OPENCODE_PROVIDER_AUTH_STYLE as AuthStyle | undefined;
+  const authOverride = secrets.OPENCODE_PROVIDER_AUTH_STYLE as
+    | AuthStyle
+    | undefined;
   const envKeyOverride = secrets.OPENCODE_PROVIDER_API_KEY_ENV;
 
   const registered = PROVIDER_REGISTRY[provider];
   if (!registered && !upstreamOverride) {
-    logger.warn({ provider }, 'OpenCode provider not in registry and no OPENCODE_PROVIDER_UPSTREAM_URL set; proxy will forward as-is');
+    logger.warn(
+      { provider },
+      'OpenCode provider not in registry and no OPENCODE_PROVIDER_UPSTREAM_URL set; proxy will forward as-is',
+    );
     return null;
   }
 
   return {
     upstream: upstreamOverride || registered.upstream,
     auth: authOverride || registered?.auth || 'bearer',
-    envKey: envKeyOverride || registered?.envKey || `${provider.toUpperCase()}_API_KEY`,
+    envKey:
+      envKeyOverride ||
+      registered?.envKey ||
+      `${provider.toUpperCase()}_API_KEY`,
   };
 }
 
@@ -109,9 +175,8 @@ export function startCredentialProxy(
   ]);
 
   // Determine if we're routing an OpenCode non-Anthropic provider
-  const ocProvider = secrets.AGENT_RUNNER === 'opencode'
-    ? resolveOcProvider(secrets)
-    : null;
+  const ocProvider =
+    secrets.AGENT_RUNNER === 'opencode' ? resolveOcProvider(secrets) : null;
 
   let upstreamUrl: URL;
   let authMode: AuthMode;
@@ -128,14 +193,21 @@ export function startCredentialProxy(
     ocAuthStyle = ocProvider.auth;
     authMode = 'api-key'; // doesn't matter — we handle injection below
     logger.info(
-      { provider: secrets.OPENCODE_PROVIDER, upstream: ocProvider.upstream, auth: ocProvider.auth },
+      {
+        provider: secrets.OPENCODE_PROVIDER,
+        upstream: ocProvider.upstream,
+        auth: ocProvider.auth,
+      },
       'Credential proxy: OpenCode provider mode',
     );
   } else {
     // Default Anthropic / OpenCode-with-Anthropic mode
     authMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
-    oauthToken = secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
-    upstreamUrl = new URL(secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com');
+    oauthToken =
+      secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
+    upstreamUrl = new URL(
+      secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
+    );
   }
 
   const isHttps = upstreamUrl.protocol === 'https:';
@@ -147,11 +219,12 @@ export function startCredentialProxy(
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
         const body = Buffer.concat(chunks);
-        const headers: Record<string, string | number | string[] | undefined> = {
-          ...(req.headers as Record<string, string>),
-          host: upstreamUrl.host,
-          'content-length': body.length,
-        };
+        const headers: Record<string, string | number | string[] | undefined> =
+          {
+            ...(req.headers as Record<string, string>),
+            host: upstreamUrl.host,
+            'content-length': body.length,
+          };
 
         // Strip hop-by-hop headers that must not be forwarded by proxies
         delete headers['connection'];
@@ -204,7 +277,10 @@ export function startCredentialProxy(
         );
 
         upstream.on('error', (err) => {
-          logger.error({ err, url: req.url }, 'Credential proxy upstream error');
+          logger.error(
+            { err, url: req.url },
+            'Credential proxy upstream error',
+          );
           if (!res.headersSent) {
             res.writeHead(502);
             res.end('Bad Gateway');
