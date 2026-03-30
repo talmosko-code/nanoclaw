@@ -4,6 +4,7 @@ import path from 'path';
 import { OneCLI } from '@onecli-sh/sdk';
 
 import {
+  AGENT_RUNNER,
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
   DEFAULT_TRIGGER,
@@ -363,7 +364,12 @@ async function runAgent(
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
-  const sessionId = sessions[group.folder];
+  // Discard session IDs that belong to a different runner to avoid cross-runner confusion.
+  // OpenCode sessions start with "ses_"; Anthropic/Claude Code sessions are UUIDs.
+  const rawSessionId = sessions[group.folder];
+  const isOpencodeSession = rawSessionId?.startsWith('ses_');
+  const sessionId =
+    (AGENT_RUNNER === 'opencode') === isOpencodeSession ? rawSessionId : undefined;
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();

@@ -162,7 +162,9 @@ function buildVolumeMounts(
   // Derive mcpServers from the host's authenticated MCP OAuth entries so
   // any server the user connects via Claude Code is automatically available
   // in containers — no manual config needed.
-  const mcpServers: Record<string, { type: string; url: string }> = {};
+  const mcpServers: Record<string, unknown> = {};
+
+  // 1. HTTP/OAuth MCPs from ~/.claude/.credentials.json
   const hostCredsPath = path.join(os.homedir(), '.claude', '.credentials.json');
   if (fs.existsSync(hostCredsPath)) {
     try {
@@ -178,6 +180,23 @@ function buildVolumeMounts(
       }
     } catch {
       // Ignore parse errors — containers will start without MCP
+    }
+  }
+
+  // 2. Local/stdio MCPs from ~/.claude.json (added via "claude mcp add" in this project)
+  const claudeJsonPath = path.join(os.homedir(), '.claude.json');
+  if (fs.existsSync(claudeJsonPath)) {
+    try {
+      const claudeJson = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8'));
+      const projectMcps = claudeJson.projects?.[process.cwd()]?.mcpServers ?? {};
+      for (const [name, cfg] of Object.entries(projectMcps) as Array<[string, Record<string, unknown>]>) {
+        if (cfg.command) {
+          // Local stdio MCP — pass through as-is (Claude Code format); opencode.ts translates it
+          mcpServers[name] = cfg;
+        }
+      }
+    } catch {
+      // Ignore parse errors
     }
   }
 
@@ -236,6 +255,27 @@ function buildVolumeMounts(
     containerPath: '/home/node/.claude',
     readonly: false,
   });
+
+  // Per-group OpenCode session data directory.
+  // Mounted at XDG_DATA_HOME/opencode so sessions persist across container restarts.
+  // Only created/mounted when AGENT_RUNNER=opencode to avoid unnecessary dirs.
+  const ocEnv = readEnvFile(['AGENT_RUNNER']);
+  if (ocEnv.AGENT_RUNNER === 'opencode') {
+    const groupOpencodeDir = path.join(DATA_DIR, 'sessions', group.folder, 'opencode');
+    fs.mkdirSync(groupOpencodeDir, { recursive: true });
+    try {
+      fs.chownSync(groupOpencodeDir, 1000, 1000);
+    } catch {
+      if (fs.existsSync(groupOpencodeDir)) {
+        fs.chmodSync(groupOpencodeDir, 0o777);
+      }
+    }
+    mounts.push({
+      hostPath: groupOpencodeDir,
+      containerPath: '/home/node/.local/share/opencode',
+      readonly: false,
+    });
+  }
 
   // Sync host Claude credentials (MCP OAuth tokens) into the session directory
   // so containers can use Notion and other MCP servers that require OAuth.
@@ -381,7 +421,13 @@ function buildContainerArgs(
   // Pass model override for OpenRouter or custom models
   // Use readEnvFile (not process.env) so runtime .env changes take effect
   // without restarting — same pattern as the credential proxy.
-  const envVars = readEnvFile(['ANTHROPIC_MODEL']);
+  const envVars = readEnvFile([
+    'ANTHROPIC_MODEL',
+    'AGENT_RUNNER',
+    'OPENCODE_PROVIDER',
+    'OPENCODE_MODEL',
+    'OPENCODE_SMALL_MODEL',
+  ]);
   const modelToUse = envVars.ANTHROPIC_MODEL;
 
   if (modelToUse) {
@@ -389,6 +435,17 @@ function buildContainerArgs(
     args.push('-e', `ANTHROPIC_MODEL=${modelToUse}`);
     // Also set default sonnet model since that's what SDK often uses
     args.push('-e', `ANTHROPIC_DEFAULT_SONNET_MODEL=${modelToUse}`);
+  }
+
+  // OpenCode runner configuration (non-secret labels safe to pass as env vars)
+  if (envVars.AGENT_RUNNER) args.push('-e', `AGENT_RUNNER=${envVars.AGENT_RUNNER}`);
+  if (envVars.OPENCODE_PROVIDER) args.push('-e', `OPENCODE_PROVIDER=${envVars.OPENCODE_PROVIDER}`);
+  if (envVars.OPENCODE_MODEL) args.push('-e', `OPENCODE_MODEL=${envVars.OPENCODE_MODEL}`);
+  if (envVars.OPENCODE_SMALL_MODEL) args.push('-e', `OPENCODE_SMALL_MODEL=${envVars.OPENCODE_SMALL_MODEL}`);
+  // Force XDG_DATA_HOME so OpenCode writes session data to the mounted directory
+  // regardless of whether the container runs as root or as node (uid 1000)
+  if (envVars.AGENT_RUNNER === 'opencode') {
+    args.push('-e', 'XDG_DATA_HOME=/home/node/.local/share');
   }
 
   // Runtime-specific args for host gateway resolution
