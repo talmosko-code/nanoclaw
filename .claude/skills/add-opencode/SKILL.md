@@ -708,6 +708,51 @@ provider: {
 
 The OpenCode SDK uses `OPENCODE_CONFIG_CONTENT` internally to pass the JSON config blob to the spawned `opencode serve` process. Setting this env var yourself will be overwritten or cause conflicts. Always inject config via `createOpencode({ config: ... })`.
 
+### 15. OpenCode does NOT read `CLAUDE.md` automatically — inject it into the first prompt
+
+Claude Code's SDK reads `CLAUDE.md` from `cwd` automatically. OpenCode has no such mechanism — it ignores the filesystem entirely for system instructions. The fix: read `/workspace/group/CLAUDE.md` (and `/workspace/global/CLAUDE.md` for non-main groups) at the start of the first `runQuery()` call and prepend the content to the prompt inside `<system>` tags:
+
+```typescript
+if (!this.claudeMdInjected) {
+  const claudeMd = readClaudeMd(opts.containerInput);
+  if (claudeMd) {
+    effectivePrompt = `<system>\n${claudeMd}\n</system>\n\n${prompt}`;
+  }
+  this.claudeMdInjected = true;
+}
+```
+
+Only inject on the first query — subsequent turns in the same session already have it in history. **Symptom if missing**: agent ignores its name, role, formatting rules, and any group-specific instructions. It may respond as a generic assistant or identify itself as a different model.
+
+### 16. Register both main and small models, not just the main model
+
+`buildConfig()` originally only registered the main model. When `OPENCODE_SMALL_MODEL` differs from `OPENCODE_MODEL`, OpenCode tries to use the small model for title generation and fails with `Model not found`. Register all unique model IDs:
+
+```typescript
+const modelsToRegister = [providerModelId, providerSmallModelId]
+  .filter(Boolean)
+  .filter((id, i, a) => a.indexOf(id) === i); // deduplicate
+
+models: Object.fromEntries(
+  modelsToRegister.map((id) => [id, { id, name: id, tool_call: true }]),
+),
+```
+
+### 17. Inline `.env` comments get included in env var values
+
+`.env` files do NOT support inline comments. `KEY=value  # comment` sets the value to `value  # comment` — the comment becomes part of the string. OpenCode then tries to find a model named `openrouter/qwen/qwen3.5-flash-02-23   # format: provider/model-id`. **Symptom**: `Model not found: openrouter/qwen/qwen3.5-flash-02-23   # format:...` with the comment text in the error. Always put comments on their own line above the key.
+
+### 18. OpenRouter shows "Unknown" app unless you set identifying headers
+
+OpenRouter uses `X-Title` and `HTTP-Referer` request headers to label traffic in its dashboard. Without them, every request shows as "Unknown". Add these in the credential proxy when `OPENCODE_PROVIDER=openrouter`:
+
+```typescript
+if (secrets.OPENCODE_PROVIDER === 'openrouter') {
+  headers['x-title'] = 'NanoClaw';
+  headers['http-referer'] = 'https://github.com/qwibitai/nanoclaw';
+}
+```
+
 ---
 
 ## Architecture Notes

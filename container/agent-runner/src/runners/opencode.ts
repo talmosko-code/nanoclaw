@@ -26,7 +26,15 @@ function buildConfig(mcpServerPath: string, containerInput: ContainerInput): Rec
   const proxyUrl = process.env.ANTHROPIC_BASE_URL;
 
   // Strip "provider/" prefix to get the bare model ID for the registry entry
-  const providerModelId = model ? model.replace(new RegExp(`^${provider}/`), '') : undefined;
+  const stripPrefix = (m: string) => m.replace(new RegExp(`^${provider}/`), '');
+  const providerModelId = model ? stripPrefix(model) : undefined;
+  const providerSmallModelId = smallModel ? stripPrefix(smallModel) : undefined;
+
+  // Collect unique model IDs to register (main + small, deduplicated)
+  const modelsToRegister: string[] = [];
+  if (providerModelId) modelsToRegister.push(providerModelId);
+  if (providerSmallModelId && providerSmallModelId !== providerModelId)
+    modelsToRegister.push(providerSmallModelId);
 
   // For Anthropic: no explicit provider config — OpenCode inherits ANTHROPIC_BASE_URL
   // and ANTHROPIC_API_KEY=placeholder from the container env automatically via @ai-sdk/anthropic.
@@ -37,16 +45,12 @@ function buildConfig(mcpServerPath: string, containerInput: ContainerInput): Rec
       : {
           [provider]: {
             options: { apiKey: 'placeholder', baseURL: proxyUrl },
-            // Register the model if it may not be in OpenCode's built-in models.dev registry
-            ...(providerModelId
+            // Register all models that may not be in OpenCode's built-in models.dev registry
+            ...(modelsToRegister.length > 0
               ? {
-                  models: {
-                    [providerModelId]: {
-                      id: providerModelId,
-                      name: providerModelId,
-                      tool_call: true,
-                    },
-                  },
+                  models: Object.fromEntries(
+                    modelsToRegister.map((id) => [id, { id, name: id, tool_call: true }]),
+                  ),
                 }
               : {}),
           },
@@ -117,12 +121,32 @@ function buildConfig(mcpServerPath: string, containerInput: ContainerInput): Rec
  *     runner.close();
  *   }
  */
+/** Read CLAUDE.md files from the container workspace and return a combined context block. */
+function readClaudeMd(containerInput: ContainerInput): string {
+  const parts: string[] = [];
+
+  // Per-group CLAUDE.md — always present (mounted at /workspace/group)
+  const groupMdPath = '/workspace/group/CLAUDE.md';
+  if (fs.existsSync(groupMdPath)) {
+    parts.push(fs.readFileSync(groupMdPath, 'utf-8').trim());
+  }
+
+  // Global CLAUDE.md — for non-main groups, the Anthropic runner appends this too
+  const globalMdPath = '/workspace/global/CLAUDE.md';
+  if (!containerInput.isMain && fs.existsSync(globalMdPath)) {
+    parts.push(fs.readFileSync(globalMdPath, 'utf-8').trim());
+  }
+
+  return parts.join('\n\n---\n\n');
+}
+
 export class OpenCodeRunner {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private client: any;
   private server: { url: string; close(): void };
   private stream: AsyncGenerator<OcEvent>;
   private sessionId: string | undefined;
+  private claudeMdInjected = false;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private constructor(client: any, server: { url: string; close(): void }, stream: AsyncGenerator<OcEvent>) {
@@ -163,11 +187,24 @@ export class OpenCodeRunner {
     }
     const id = this.sessionId;
 
+    // On the first query of a new session, prepend the group's CLAUDE.md so the agent
+    // gets its identity/instructions. Claude Code reads this automatically from cwd;
+    // OpenCode has no such mechanism, so we inject it explicitly.
+    let effectivePrompt = prompt;
+    if (!this.claudeMdInjected) {
+      const claudeMd = readClaudeMd(opts.containerInput);
+      if (claudeMd) {
+        effectivePrompt = `<system>\n${claudeMd}\n</system>\n\n${prompt}`;
+        log(`Injected CLAUDE.md context (${claudeMd.length} chars)`);
+      }
+      this.claudeMdInjected = true;
+    }
+
     // Send prompt asynchronously — returns immediately (HTTP 204), agent runs in background
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (this.client as any).session.promptAsync({
       path: { id },
-      body: { parts: [{ type: 'text', text: prompt }] },
+      body: { parts: [{ type: 'text', text: effectivePrompt }] },
     });
 
     let closedDuringQuery = false;
