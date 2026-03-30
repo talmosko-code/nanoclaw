@@ -188,8 +188,11 @@ function buildVolumeMounts(
   if (fs.existsSync(claudeJsonPath)) {
     try {
       const claudeJson = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8'));
-      const projectMcps = claudeJson.projects?.[process.cwd()]?.mcpServers ?? {};
-      for (const [name, cfg] of Object.entries(projectMcps) as Array<[string, Record<string, unknown>]>) {
+      const projectMcps =
+        claudeJson.projects?.[process.cwd()]?.mcpServers ?? {};
+      for (const [name, cfg] of Object.entries(projectMcps) as Array<
+        [string, Record<string, unknown>]
+      >) {
         if (cfg.command) {
           // Local stdio MCP — pass through as-is (Claude Code format); opencode.ts translates it
           mcpServers[name] = cfg;
@@ -261,7 +264,12 @@ function buildVolumeMounts(
   // Only created/mounted when AGENT_RUNNER=opencode to avoid unnecessary dirs.
   const ocEnv = readEnvFile(['AGENT_RUNNER']);
   if (ocEnv.AGENT_RUNNER === 'opencode') {
-    const groupOpencodeDir = path.join(DATA_DIR, 'sessions', group.folder, 'opencode');
+    const groupOpencodeDir = path.join(
+      DATA_DIR,
+      'sessions',
+      group.folder,
+      'opencode',
+    );
     fs.mkdirSync(groupOpencodeDir, { recursive: true });
     try {
       fs.chownSync(groupOpencodeDir, 1000, 1000);
@@ -438,10 +446,14 @@ function buildContainerArgs(
   }
 
   // OpenCode runner configuration (non-secret labels safe to pass as env vars)
-  if (envVars.AGENT_RUNNER) args.push('-e', `AGENT_RUNNER=${envVars.AGENT_RUNNER}`);
-  if (envVars.OPENCODE_PROVIDER) args.push('-e', `OPENCODE_PROVIDER=${envVars.OPENCODE_PROVIDER}`);
-  if (envVars.OPENCODE_MODEL) args.push('-e', `OPENCODE_MODEL=${envVars.OPENCODE_MODEL}`);
-  if (envVars.OPENCODE_SMALL_MODEL) args.push('-e', `OPENCODE_SMALL_MODEL=${envVars.OPENCODE_SMALL_MODEL}`);
+  if (envVars.AGENT_RUNNER)
+    args.push('-e', `AGENT_RUNNER=${envVars.AGENT_RUNNER}`);
+  if (envVars.OPENCODE_PROVIDER)
+    args.push('-e', `OPENCODE_PROVIDER=${envVars.OPENCODE_PROVIDER}`);
+  if (envVars.OPENCODE_MODEL)
+    args.push('-e', `OPENCODE_MODEL=${envVars.OPENCODE_MODEL}`);
+  if (envVars.OPENCODE_SMALL_MODEL)
+    args.push('-e', `OPENCODE_SMALL_MODEL=${envVars.OPENCODE_SMALL_MODEL}`);
   // Force XDG_DATA_HOME so OpenCode writes session data to the mounted directory
   // regardless of whether the container runs as root or as node (uid 1000)
   if (envVars.AGENT_RUNNER === 'opencode') {

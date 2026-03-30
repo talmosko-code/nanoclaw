@@ -369,7 +369,9 @@ async function runAgent(
   const rawSessionId = sessions[group.folder];
   const isOpencodeSession = rawSessionId?.startsWith('ses_');
   const sessionId =
-    (AGENT_RUNNER === 'opencode') === isOpencodeSession ? rawSessionId : undefined;
+    (AGENT_RUNNER === 'opencode') === isOpencodeSession
+      ? rawSessionId
+      : undefined;
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
