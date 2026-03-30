@@ -231,6 +231,12 @@ export function startCredentialProxy(
         delete headers['keep-alive'];
         delete headers['transfer-encoding'];
 
+        // Add OpenRouter app identification headers (shows "NanoClaw" instead of "Unknown")
+        if (secrets.OPENCODE_PROVIDER === 'openrouter') {
+          headers['x-title'] = 'NanoClaw';
+          headers['http-referer'] = 'https://github.com/qwibitai/nanoclaw';
+        }
+
         if (ocProvider && ocProviderApiKey) {
           // OpenCode non-Anthropic provider: inject credentials using provider's auth style
           delete headers['x-api-key'];
