@@ -1,11 +1,11 @@
 ---
 name: restart-agents
-description: Kill all running agent containers and optionally clear stored sessions. Use when agents are stuck, using wrong model/config, or need a clean slate after changing .env.
+description: Kill all running agent containers and optionally clear stored sessions. Works for both AGENT_RUNNER=anthropic and AGENT_RUNNER=opencode. Use when agents are stuck, using wrong model/config, or need a clean slate after changing .env.
 ---
 
 # Restart Agents
 
-Kills all running NanoClaw agent containers and optionally wipes their stored sessions so they start completely fresh on the next message.
+Kills all running NanoClaw agent containers and optionally wipes their stored sessions so they start completely fresh on the next message. Works for both `AGENT_RUNNER=anthropic` and `AGENT_RUNNER=opencode`.
 
 ## When to use
 
@@ -25,7 +25,7 @@ This stops all active agent containers. NanoClaw's queue manager will spawn fres
 
 ## Step 2 (optional): Clear stored session IDs
 
-If you also want to wipe the conversation history and start a brand new session:
+Wipes session IDs from SQLite so the runner starts a brand new conversation. Works for both runners — Anthropic sessions are UUID strings, OpenCode sessions are `ses_...` prefixed IDs.
 
 **Clear all groups:**
 ```bash
@@ -41,19 +41,29 @@ sqlite3 /root/Documents/nanoclaw/store/messages.db \
 
 > Note: `UPDATE sessions SET session_id = NULL` will fail due to a NOT NULL constraint — use `DELETE` instead.
 
-## Step 3 (optional): Wipe OpenCode on-disk session data
+## Step 3 (optional): Wipe on-disk session data
 
-OpenCode persists session state to `data/sessions/<group>/opencode/`. Deleting this forces a truly fresh session even if the SQLite row is also deleted:
+**OpenCode** (`AGENT_RUNNER=opencode`): persists session state to `data/sessions/<group>/opencode/`. Delete to force a truly fresh session:
 
-**All groups:**
 ```bash
+# All groups
 rm -rf /root/Documents/nanoclaw/data/sessions/*/opencode/
-```
 
-**Specific group:**
-```bash
+# Specific group
 rm -rf /root/Documents/nanoclaw/data/sessions/telegram_main/opencode/
 ```
+
+**Anthropic** (`AGENT_RUNNER=anthropic`): session state lives inside Claude Code's `.claude/` directory in the group's data folder:
+
+```bash
+# All groups
+rm -rf /root/Documents/nanoclaw/data/sessions/*/.claude/
+
+# Specific group
+rm -rf /root/Documents/nanoclaw/data/sessions/telegram_main/.claude/
+```
+
+Deleting the `.claude/` folder removes conversation history, tool caches, and project memory for that group.
 
 ## Step 4 (optional): Sync updated runner source to host mounts
 
@@ -74,21 +84,25 @@ After syncing, kill the containers (Step 1) and the next spawn will use the new 
 
 ## Full clean restart (all-in-one)
 
+**For OpenCode runner:**
 ```bash
-# Kill containers
 docker ps --filter "name=nanoclaw-" --format "{{.Names}}" | xargs -r docker kill
-
-# Clear all sessions (SQLite + disk)
 sqlite3 /root/Documents/nanoclaw/store/messages.db "DELETE FROM sessions;"
 rm -rf /root/Documents/nanoclaw/data/sessions/*/opencode/
+systemctl restart nanoclaw
+```
 
-# Restart nanoclaw service
+**For Anthropic runner:**
+```bash
+docker ps --filter "name=nanoclaw-" --format "{{.Names}}" | xargs -r docker kill
+sqlite3 /root/Documents/nanoclaw/store/messages.db "DELETE FROM sessions;"
+rm -rf /root/Documents/nanoclaw/data/sessions/*/.claude/
 systemctl restart nanoclaw
 ```
 
 ## After restart
 
-Send a message to any registered group. The container spawns fresh, reads the current `.env` values, and (for OpenCode) injects the group's `CLAUDE.md` on the first query.
+Send a message to any registered group. The container spawns fresh and reads the current `.env` values.
 
 Check it's working:
 ```bash
@@ -100,7 +114,14 @@ docker logs $(docker ps --filter "name=nanoclaw-" --format "{{.Names}}" | head -
 ```
 
 Key log lines to look for:
+
+**OpenCode:**
+- `Injected CLAUDE.md context (N chars)` — group instructions loaded
+- `OpenCode session created: ses_...` — fresh session started
+
+**Anthropic:**
+- `Starting Anthropic query (session: new)` — fresh session started
+
+**Both:**
 - `Spawning container agent` — container starting
-- `Injected CLAUDE.md context (N chars)` — group instructions loaded (OpenCode)
-- `OpenCode session created: ses_...` — fresh session
 - `Agent output: N chars` — response produced
