@@ -30,8 +30,8 @@ RUN apt-get update && apt-get install -y \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install agent-browser and claude-code globally
-RUN npm install -g agent-browser @anthropic-ai/claude-code
+# Install agent-browser, claude-code, and opencode globally
+RUN npm install -g agent-browser @anthropic-ai/claude-code opencode-ai
 
 # Create app directory
 WORKDIR /app
@@ -56,6 +56,13 @@ RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/
 # Credentials are injected by the host's credential proxy — never passed here.
 # Follow-up messages arrive via IPC files in /workspace/ipc/input/
 RUN printf '#!/bin/bash\nset -e\ncd /app && npx tsc --outDir /tmp/dist 2>&1 >&2\nln -s /app/node_modules /tmp/dist/node_modules\nchmod -R a-w /tmp/dist\ncat > /tmp/input.json\nnode /tmp/dist/index.js < /tmp/input.json\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+
+# Pre-create /home/node/.local tree so the node user can write to all subdirs
+# even when a Docker volume mount overlays /home/node/.local/share/opencode.
+# Without this, Docker creates the parent dirs as root, blocking sibling writes
+# like /home/node/.local/state (used by OpenCode/Bun).
+RUN mkdir -p /home/node/.local/share /home/node/.local/state /home/node/.local/cache \
+    && chown -R node:node /home/node/.local
 
 # Set ownership to node user (non-root) for writable directories
 RUN chown -R node:node /workspace && chmod 777 /home/node

@@ -12,6 +12,7 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'ONECLI_URL',
   'TZ',
+  'AGENT_RUNNER',
 ]);
 
 export const ASSISTANT_NAME =
@@ -101,3 +102,7 @@ function resolveConfigTimezone(): string {
   return 'UTC';
 }
 export const TIMEZONE = resolveConfigTimezone();
+
+// Agent runner selection: 'anthropic' (default) or 'opencode'
+export const AGENT_RUNNER =
+  process.env.AGENT_RUNNER || envConfig.AGENT_RUNNER || 'anthropic';
