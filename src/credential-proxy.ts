@@ -123,6 +123,12 @@ const PROVIDER_REGISTRY: Record<string, ProviderEntry> = {
     auth: 'bearer',
     envKey: 'SAMBANOVA_API_KEY',
   },
+  /** Moonshot AI Kimi — OpenAI-compatible API */
+  moonshot: {
+    upstream: 'https://api.moonshot.ai/v1',
+    auth: 'bearer',
+    envKey: 'MOONSHOT_API_KEY',
+  },
 };
 
 /** Resolve provider entry for AGENT_RUNNER=opencode mode. */
