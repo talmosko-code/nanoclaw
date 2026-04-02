@@ -98,7 +98,10 @@ export class WhatsAppChannel implements Channel {
         exec(
           `osascript -e 'display notification "${msg}" with title "NanoClaw" sound name "Basso"'`,
         );
-        setTimeout(() => process.exit(1), 1000);
+        this.connected = false;
+        logger.warn('WhatsApp channel disabled — re-authenticate via /setup to re-enable.');
+        onFirstOpen?.();
+        onFirstOpen = undefined;
       }
 
       if (connection === 'close') {
@@ -127,8 +130,9 @@ export class WhatsAppChannel implements Channel {
             }, 5000);
           });
         } else {
-          logger.info('Logged out. Run /setup to re-authenticate.');
-          process.exit(0);
+          logger.info('Logged out. Run /setup to re-authenticate. Other channels remain active.');
+          onFirstOpen?.();
+          onFirstOpen = undefined;
         }
       } else if (connection === 'open') {
         this.connected = true;
