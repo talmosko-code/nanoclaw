@@ -328,6 +328,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
     if (result.status === 'error') {
       hadError = true;
+      if (group.containerConfig?.reportErrorsToChat && !outputSentToUser) {
+        const errorMsg = result.error || 'Unknown agent error';
+        logger.warn(
+          { group: group.name, error: errorMsg },
+          'Reporting agent error to chat',
+        );
+        await channel.sendMessage(chatJid, `Error: ${errorMsg}`);
+        outputSentToUser = true;
+      }
     }
   });
 
@@ -449,6 +458,9 @@ async function runAgent(
         { group: group.name, error: output.error },
         'Container agent error',
       );
+      if (group.containerConfig?.reportErrorsToChat && onOutput) {
+        await onOutput(output);
+      }
       return 'error';
     }
 
