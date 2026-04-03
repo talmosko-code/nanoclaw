@@ -74,6 +74,10 @@ RUN mkdir -p /home/node/.local/share /home/node/.local/state /home/node/.local/c
 COPY marketing-scripts/ /app/marketing-scripts/
 RUN cd /app/marketing-scripts && npm install
 
+# Install podcast scripts (YouTube upload, caption download — stdlib only, no pip needed)
+COPY podcast-scripts/ /app/podcast-scripts/
+RUN chmod +x /app/podcast-scripts/*.py
+
 # Set ownership to node user (non-root) for writable directories
 RUN chown -R node:node /workspace && chmod 777 /home/node
 
