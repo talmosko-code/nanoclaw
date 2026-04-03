@@ -273,13 +273,6 @@ Format: one source per block. Copy the block to add more (e.g. Israeli communiti
   priority: 1
   notes: "רשת עושים היסטוריה; tech history and trends"
 
-- name: "לא טכני ולא במקרה"
-  type: podcast
-  url: "https://anchor.fm/s/f01f6814/podcast/rss"
-  language: he
-  active: true
-  priority: 1
-  notes: "טל מוסקוביץ' ואדיר קנדל; פודקאסט על קריירה ופיתוח עצמי למפתחים"
 
 # Podcasts — Hebrew (Business / Inspiration / Other)
 - name: "אנשי הקשב"
@@ -438,4 +431,5 @@ Format: one source per block. Copy the block to add more (e.g. Israeli communiti
 For Geektime (type: blog), run `npm run geektime:scrape` and use **out/sources/geektime-articles.md** (one Markdown file with all categories and articles).
 
 To add Israeli sources later: add new blocks in the same format and set `active: true`.
-- name: "Twitter / X"\ntype: twitter\nurl: "https://twitter.com/"\nlanguage: en\nactive: true\npriority: 2\nnotes: "Real-time ideas, trending topics, dev discussions"
+
+```
