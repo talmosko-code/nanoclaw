@@ -31,6 +31,7 @@ export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
   ownerBypass?: boolean; // Default: true — set to false to require trigger even from owner
+  reportErrorsToChat?: boolean; // Default: false — send agent error details to the chat
 }
 
 export interface RegisteredGroup {
