@@ -13,7 +13,7 @@ All output goes to `/workspace/group/marketing/data/` (writable, per-group).
 
 ---
 
-## Step 1 — Bootstrap config on first run
+## Step 1 — Bootstrap config on first run, always refresh sources.json
 
 Check if the config directory exists:
 
@@ -25,14 +25,20 @@ If **MISSING**, create it and copy the bundled defaults:
 
 ```bash
 mkdir -p /workspace/group/marketing/config/brand
-cp /app/marketing-scripts/defaults/sources.md /workspace/group/marketing/config/sources.md
+cp /app/marketing-scripts/defaults/sources.json /workspace/group/marketing/config/sources.json
 cp /app/marketing-scripts/defaults/youtube-channels.md /workspace/group/marketing/config/youtube-channels.md
 cp /app/marketing-scripts/defaults/brand/objectives-positioning.md /workspace/group/marketing/config/brand/
 cp /app/marketing-scripts/defaults/brand/pillars-claims.md /workspace/group/marketing/config/brand/
 cp /app/marketing-scripts/defaults/brand/voice-hebrew-style.md /workspace/group/marketing/config/brand/
 ```
 
-Notify the user: "Config created at `/workspace/group/marketing/config/` with default sources and brand docs."
+If **EXISTS**, always refresh `sources.json` from the bundled defaults to pick up any upstream fixes:
+
+```bash
+cp /app/marketing-scripts/defaults/sources.json /workspace/group/marketing/config/sources.json
+```
+
+Notify the user: "Config created at `/workspace/group/marketing/config/` with default sources and brand docs." (first run) or "sources.json refreshed from bundled defaults." (subsequent runs).
 
 ---
 
@@ -41,29 +47,34 @@ Notify the user: "Config created at `/workspace/group/marketing/config/` with de
 Start all four sub-agents simultaneously using the **Task tool** — do NOT wait for one to finish before starting the next.
 
 **Sub-agent 1: Newsletters**
+
 ```bash
 cd /app/marketing-scripts && npm run newsletters:fetch
 ```
-Reads: `config/sources.md` (type: newsletter, active: true)
+
+Reads: `config/sources.json` (type: newsletter, active: true)
 Writes: `data/newsletters/latest.json` + `data/newsletters/latest.md`
 
 **Sub-agent 2: Geektime blog**
+
 ```bash
 cd /app/marketing-scripts && npm run geektime:scrape
 ```
+
 Writes: `data/geektime/latest.json` + `data/geektime/latest.md`
 
 **Sub-agent 3: Podcasts**
 
 First check if faster-whisper is available:
+
 ```bash
 python3 -c "import faster_whisper" 2>/dev/null && echo WHISPER_OK || echo WHISPER_MISSING
 ```
 
-- If WHISPER_OK: `cd /app/marketing-scripts && npm run podcasts:fetch-transcribe`
-- If WHISPER_MISSING: `cd /app/marketing-scripts && npm run podcasts:fetch`
+- Always: `cd /app/marketing-scripts && npm run podcasts:fetch` (metadata only, ~30 seconds)
+- Optional transcription (separate step, **timeout: 200 minutes**): `cd /app/marketing-scripts && npm run podcasts:fetch-transcribe`
 
-Reads: `config/sources.md` (type: podcast, active: true)
+Reads: `config/sources.json` (type: podcast, active: true)
 Writes: `data/podcasts/latest.json` + `data/podcasts/latest.md`
 
 Note: Transcription is local (faster-whisper). Model downloads on first run to
@@ -71,9 +82,11 @@ Note: Transcription is local (faster-whisper). Model downloads on first run to
 Control model size via `WHISPER_MODEL` env var (default: small).
 
 **Sub-agent 4: YouTube**
+
 ```bash
 cd /app/marketing-scripts && npm run youtube:fetch
 ```
+
 Reads: `config/youtube-channels.md`
 Writes: `data/youtube/latest.json` + `data/youtube/latest.md`
 
@@ -81,9 +94,10 @@ Writes: `data/youtube/latest.json` + `data/youtube/latest.md`
 
 ## Step 3 — Wait for all sub-agents, check results
 
-Wait for all four tasks to complete (timeout: 60 minutes for transcription run; 10 minutes otherwise).
+Wait for all four tasks to complete (timeout: **120 minutes** for podcast transcription run; 10 minutes otherwise).
 
 Verify each output:
+
 ```bash
 cat /workspace/group/marketing/data/newsletters/latest.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'newsletters: {sum(len(f[\"items\"]) for f in d[\"feeds\"])} items')" 2>/dev/null
 cat /workspace/group/marketing/data/geektime/latest.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'geektime: {len(d[\"articles\"])} articles')" 2>/dev/null
@@ -104,6 +118,7 @@ date -u +%Y-%m-%dT%H:%M:%SZ > /workspace/group/marketing/data/.last-collected
 ## Step 5 — Return summary
 
 Report:
+
 - Counts per source
 - Any failures (which fetcher failed and why)
 - Whether transcription was enabled
@@ -116,7 +131,7 @@ Report:
 ```
 /workspace/group/marketing/
   config/
-    sources.md               ← active sources (edit to add/disable)
+    sources.json             ← active sources (edit to add/disable)
     youtube-channels.md      ← curated YouTube channels
     brand/
       objectives-positioning.md

@@ -13,14 +13,24 @@
  *   npm run newsletters:fetch
  */
 
-import { XMLParser } from "fast-xml-parser";
-import TurndownService from "turndown";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import path from "node:path";
+import { XMLParser } from 'fast-xml-parser';
+import TurndownService from 'turndown';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 
-const SOURCES_PATH = "/workspace/group/marketing/config/sources.md";
-const OUT_DIR = "/workspace/group/marketing/data/newsletters";
+const SOURCES_PATH = '/workspace/group/marketing/config/sources.json';
+const OUT_DIR = '/workspace/group/marketing/data/newsletters';
+
+type Source = {
+  name: string;
+  type: string;
+  url: string;
+  language: string;
+  active: boolean;
+  priority: number;
+  notes?: string;
+};
 
 type Feed = {
   id: string;
@@ -45,47 +55,21 @@ type FeedResult = {
   items: ExtractedItem[];
 };
 
-// Parse active newsletter sources from sources.md
-function parseNewsletterSources(md: string): Feed[] {
-  const yamlBlockRe = /```yaml\n([\s\S]*?)```/g;
-  const feeds: Feed[] = [];
-
-  let block: RegExpExecArray | null;
-  while ((block = yamlBlockRe.exec(md)) !== null) {
-    const yaml = block[1]!;
-    const lines = yaml.split("\n");
-    let current: Partial<{ name: string; url: string; type: string; active: boolean }> = {};
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith("- name:")) {
-        if (current.name && current.url && current.type === "newsletter" && current.active !== false) {
-          const id = current.name
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/^-|-$/g, "");
-          feeds.push({ id, name: current.name, url: current.url });
-        }
-        current = { name: trimmed.slice(7).trim().replace(/^["']|["']$/g, "") };
-      } else if (trimmed.startsWith("type:")) {
-        current.type = trimmed.slice(5).trim().replace(/^["']|["']$/g, "");
-      } else if (trimmed.startsWith("url:")) {
-        current.url = trimmed.slice(4).trim().replace(/^["']|["']$/g, "");
-      } else if (trimmed.startsWith("active:")) {
-        current.active = trimmed.slice(7).trim() !== "false";
-      }
-    }
-    // Push last entry
-    if (current.name && current.url && current.type === "newsletter" && current.active !== false) {
-      const id = current.name
+// Load active newsletter sources from sources.json
+function loadNewsletterSources(jsonPath: string): Feed[] {
+  const raw = JSON.parse(
+    require('fs').readFileSync(jsonPath, 'utf-8'),
+  ) as Source[];
+  return raw
+    .filter((s) => s.type === 'newsletter' && s.active !== false)
+    .map((s) => ({
+      id: s.name
         .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, "");
-      feeds.push({ id, name: current.name, url: current.url });
-    }
-  }
-
-  return feeds;
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, ''),
+      name: s.name,
+      url: s.url,
+    }));
 }
 
 function ensureArray<T>(value: T | T[] | undefined | null): T[] {
@@ -95,31 +79,34 @@ function ensureArray<T>(value: T | T[] | undefined | null): T[] {
 
 function createTurndown(): TurndownService {
   const td = new TurndownService({
-    headingStyle: "atx",
-    bulletListMarker: "-",
-    codeBlockStyle: "fenced",
-    emDelimiter: "_"
+    headingStyle: 'atx',
+    bulletListMarker: '-',
+    codeBlockStyle: 'fenced',
+    emDelimiter: '_',
   });
 
-  td.addRule("dropTrackingImages", {
+  td.addRule('dropTrackingImages', {
     filter: (node: unknown) => {
-      if (!node || (node as any).nodeName !== "IMG") return false;
-      const src = (node as any).getAttribute?.("src") || "";
+      if (!node || (node as any).nodeName !== 'IMG') return false;
+      const src = (node as any).getAttribute?.('src') || '';
       return (
-        src.includes("/open/") ||
-        src.endsWith("/rss") ||
-        src.includes("open/") ||
-        src.includes("pixel") ||
-        src.includes("1x1")
+        src.includes('/open/') ||
+        src.endsWith('/rss') ||
+        src.includes('open/') ||
+        src.includes('pixel') ||
+        src.includes('1x1')
       );
     },
-    replacement: () => ""
+    replacement: () => '',
   });
 
   return td;
 }
 
-function extractItemsFromHtml(html: string, td: TurndownService): ExtractedItem[] {
+function extractItemsFromHtml(
+  html: string,
+  td: TurndownService,
+): ExtractedItem[] {
   const items: ExtractedItem[] = [];
 
   // Extract links with surrounding context
@@ -127,32 +114,36 @@ function extractItemsFromHtml(html: string, td: TurndownService): ExtractedItem[
   let m: RegExpExecArray | null;
   while ((m = linkRe.exec(html)) !== null) {
     const url = m[1]!;
-    const rawTitle = m[2]!.replace(/<[^>]+>/g, "").trim();
+    const rawTitle = m[2]!.replace(/<[^>]+>/g, '').trim();
     if (rawTitle.length < 10) continue;
     // Skip tracking/unsub links
     if (
-      url.includes("unsubscribe") ||
-      url.includes("click.") ||
-      url.includes("track.") ||
-      url.includes("view-online")
-    ) continue;
-    items.push({ title: rawTitle, url, description: "" });
+      url.includes('unsubscribe') ||
+      url.includes('click.') ||
+      url.includes('track.') ||
+      url.includes('view-online')
+    )
+      continue;
+    items.push({ title: rawTitle, url, description: '' });
   }
 
   // Deduplicate by URL
   const seen = new Set<string>();
-  return items.filter(item => {
+  return items.filter((item) => {
     if (seen.has(item.url)) return false;
     seen.add(item.url);
     return true;
   });
 }
 
-async function fetchFeed(feed: Feed, td: TurndownService): Promise<FeedResult | null> {
+async function fetchFeed(
+  feed: Feed,
+  td: TurndownService,
+): Promise<FeedResult | null> {
   console.log(`  📡 ${feed.name} — ${feed.url}`);
   try {
     const resp = await fetch(feed.url, {
-      headers: { "User-Agent": "nanoclaw-marketing/1.0 (newsletter-fetcher)" }
+      headers: { 'User-Agent': 'nanoclaw-marketing/1.0 (newsletter-fetcher)' },
     });
     if (!resp.ok) {
       console.log(`    ⚠️  HTTP ${resp.status}`);
@@ -161,31 +152,38 @@ async function fetchFeed(feed: Feed, td: TurndownService): Promise<FeedResult | 
     const xml = await resp.text();
     const parser = new XMLParser({
       ignoreAttributes: false,
-      attributeNamePrefix: "@_",
+      attributeNamePrefix: '@_',
       parseTagValue: false,
-      parseAttributeValue: false
+      parseAttributeValue: false,
+      entityExpansionLimit: 10000,
     });
     const data = parser.parse(xml);
     const channel = data?.rss?.channel || data?.feed;
     if (!channel) {
-      console.log("    ⚠️  No channel found");
+      console.log('    ⚠️  No channel found');
       return null;
     }
 
     const rawItems = ensureArray(channel.item || channel.entry);
     const latest = rawItems[0];
     if (!latest) {
-      console.log("    ⚠️  No items");
+      console.log('    ⚠️  No items');
       return null;
     }
 
-    const latestTitle = String(latest.title || "");
-    const latestLink = String(latest.link || latest["link/@href"] || "");
-    const latestPubDate = String(latest.pubDate || latest.published || latest.updated || "");
+    const latestTitle = String(latest.title || '');
+    const latestLink = String(latest.link || latest['link/@href'] || '');
+    const latestPubDate = String(
+      latest.pubDate || latest.published || latest.updated || '',
+    );
 
     // Extract items from HTML description of latest issue
     const description = String(
-      latest.description || latest["content:encoded"] || latest.content?.["#text"] || latest.summary?.["#text"] || ""
+      latest.description ||
+        latest['content:encoded'] ||
+        latest.content?.['#text'] ||
+        latest.summary?.['#text'] ||
+        '',
     );
     const items = extractItemsFromHtml(description, td);
     console.log(`    ✓ ${items.length} items`);
@@ -193,8 +191,12 @@ async function fetchFeed(feed: Feed, td: TurndownService): Promise<FeedResult | 
     return {
       id: feed.id,
       name: feed.name,
-      latestIssue: { title: latestTitle, link: latestLink, pubDate: latestPubDate },
-      items
+      latestIssue: {
+        title: latestTitle,
+        link: latestLink,
+        pubDate: latestPubDate,
+      },
+      items,
     };
   } catch (err) {
     console.log(`    ⚠️  Error: ${err}`);
@@ -203,21 +205,20 @@ async function fetchFeed(feed: Feed, td: TurndownService): Promise<FeedResult | 
 }
 
 async function main(): Promise<void> {
-  console.log("=== Newsletter Fetcher ===\n");
+  console.log('=== Newsletter Fetcher ===\n');
 
   if (!existsSync(SOURCES_PATH)) {
     console.error(`Sources file not found: ${SOURCES_PATH}`);
-    console.error("Run /marketing-data-collector to bootstrap config.");
+    console.error('Run /marketing-data-collector to bootstrap config.');
     process.exitCode = 1;
     return;
   }
 
-  const sourcesContent = await readFile(SOURCES_PATH, "utf8");
-  const feeds = parseNewsletterSources(sourcesContent);
+  const feeds = loadNewsletterSources(SOURCES_PATH);
   console.log(`Found ${feeds.length} active newsletter sources\n`);
 
   if (feeds.length === 0) {
-    console.log("No active newsletter sources in sources.md. Exiting.");
+    console.log('No active newsletter sources in sources.md. Exiting.');
     return;
   }
 
@@ -237,27 +238,29 @@ async function main(): Promise<void> {
   // Write JSON
   const json = {
     collectedAt: new Date().toISOString(),
-    feeds: results
+    feeds: results,
   };
-  await writeFile(path.join(OUT_DIR, "latest.json"), JSON.stringify(json, null, 2), "utf8");
+  await writeFile(
+    path.join(OUT_DIR, 'latest.json'),
+    JSON.stringify(json, null, 2),
+    'utf8',
+  );
 
   // Write markdown (one line per item across all feeds)
   const md = results
-    .flatMap(r =>
-      r.items.map(item => `- [${item.title}](${item.url})`)
-    )
-    .join("\n");
+    .flatMap((r) => r.items.map((item) => `- [${item.title}](${item.url})`))
+    .join('\n');
 
   await writeFile(
-    path.join(OUT_DIR, "latest.md"),
-    `# Newsletter Items\n\nCollected: ${json.collectedAt}\nSources: ${results.map(r => r.name).join(", ")}\n\n${md}\n`,
-    "utf8"
+    path.join(OUT_DIR, 'latest.md'),
+    `# Newsletter Items\n\nCollected: ${json.collectedAt}\nSources: ${results.map((r) => r.name).join(', ')}\n\n${md}\n`,
+    'utf8',
   );
 
   console.log(`✅ Saved to ${OUT_DIR}/`);
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error(err);
   process.exitCode = 1;
 });
