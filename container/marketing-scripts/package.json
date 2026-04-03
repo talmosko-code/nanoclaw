@@ -1,0 +1,22 @@
+{
+  "name": "nanoclaw-marketing-scripts",
+  "private": true,
+  "scripts": {
+    "newsletters:fetch": "tsx src/fetch-newsletters.ts",
+    "geektime:scrape": "tsx src/scrape-geektime.ts",
+    "podcasts:fetch": "tsx src/fetch-podcasts.ts",
+    "podcasts:fetch-transcribe": "tsx src/fetch-podcasts.ts --transcribe",
+    "youtube:fetch": "tsx src/fetch-youtube.ts"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "fast-xml-parser": "^5.2.5",
+    "turndown": "^7.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "@types/turndown": "^5.0.5",
+    "tsx": "^4.20.5",
+    "typescript": "^5.7.3"
+  }
+}

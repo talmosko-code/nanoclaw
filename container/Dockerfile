@@ -24,7 +24,13 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
+    ffmpeg \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install faster-whisper for local podcast transcription (no API cost)
+RUN pip3 install faster-whisper --break-system-packages
 
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -63,6 +69,10 @@ RUN printf '#!/bin/bash\nset -e\ncd /app && npx tsc --outDir /tmp/dist 2>&1 >&2\
 # like /home/node/.local/state (used by OpenCode/Bun).
 RUN mkdir -p /home/node/.local/share /home/node/.local/state /home/node/.local/cache \
     && chown -R node:node /home/node/.local
+
+# Install marketing scripts (newsletters, podcasts, YouTube, Geektime fetchers)
+COPY marketing-scripts/ /app/marketing-scripts/
+RUN cd /app/marketing-scripts && npm install
 
 # Set ownership to node user (non-root) for writable directories
 RUN chown -R node:node /workspace && chmod 777 /home/node
