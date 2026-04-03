@@ -104,7 +104,9 @@ async function fetchPodcastEpisodes(source: PodcastSource): Promise<Episode[]> {
       attributeNamePrefix: '@_',
       parseTagValue: false,
       parseAttributeValue: false,
-      entityExpansionLimit: 10000,
+      processEntities: {
+        maxTotalExpansions: 10000,
+      },
     });
 
     const data = parser.parse(xml);

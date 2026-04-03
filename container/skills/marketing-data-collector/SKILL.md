@@ -42,7 +42,14 @@ Notify the user: "Config created at `/workspace/group/marketing/config/` with de
 
 ---
 
-## Step 2 — Launch 4 fetch sub-agents in parallel
+## Step 2 — Truncate progress file and launch 4 sub-agents in parallel
+
+Before launching, truncate the progress tracker:
+
+```bash
+mkdir -p /workspace/group/marketing/data
+> /workspace/group/marketing/data/.collection-progress
+```
 
 Start all four sub-agents simultaneously using the **Task tool** — do NOT wait for one to finish before starting the next.
 
@@ -92,11 +99,53 @@ Writes: `data/youtube/latest.json` + `data/youtube/latest.md`
 
 ---
 
-## Step 3 — Wait for all sub-agents, check results
+## Step 3 — Progressive checkpointing (check each sub-agent as it completes)
+
+As each sub-agent task completes, immediately:
+
+1. **Verify the output file** exists and is valid:
+
+   ```bash
+   # For newsletters:
+   python3 -c "import json; d=json.load(open('/workspace/group/marketing/data/newsletters/latest.json')); print(f'newsletters: {sum(len(f[\"items\"]) for f in d[\"feeds\"])} items')" 2>/dev/null && echo OK || echo FAIL
+
+   # For geektime:
+   python3 -c "import json; d=json.load(open('/workspace/group/marketing/data/geektime/latest.json')); print(f'geektime: {len(d[\"articles\"])} articles')" 2>/dev/null && echo OK || echo FAIL
+
+   # For podcasts:
+   python3 -c "import json; d=json.load(open('/workspace/group/marketing/data/podcasts/latest.json')); print(f'podcasts: {len(d[\"episodes\"])} episodes')" 2>/dev/null && echo OK || echo FAIL
+
+   # For youtube:
+   python3 -c "import json; d=json.load(open('/workspace/group/marketing/data/youtube/latest.json')); print(f'youtube: {len(d[\"videos\"])} videos')" 2>/dev/null && echo OK || echo FAIL
+   ```
+
+2. **Append result to the progress file:**
+
+   ```bash
+   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] <source>: <count> items <✓|✗ reason>" >> /workspace/group/marketing/data/.collection-progress
+   ```
+
+3. **Report partial success** — don't wait for the other agents.
+
+This ensures that if the container times out or crashes mid-run, the data already collected is safely written and the progress file records what succeeded.
+
+---
+
+## Step 4 — Wait for remaining agents
 
 Wait for all four tasks to complete (timeout: **120 minutes** for podcast transcription run; 10 minutes otherwise).
 
-Verify each output:
+---
+
+## Step 5 — Final verification
+
+Read the progress file:
+
+```bash
+cat /workspace/group/marketing/data/.collection-progress
+```
+
+Then verify each JSON output that reported success:
 
 ```bash
 cat /workspace/group/marketing/data/newsletters/latest.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'newsletters: {sum(len(f[\"items\"]) for f in d[\"feeds\"])} items')" 2>/dev/null
@@ -107,19 +156,23 @@ cat /workspace/group/marketing/data/youtube/latest.json | python3 -c "import sys
 
 ---
 
-## Step 4 — Write collection timestamp
+## Step 6 — Write collection timestamp
+
+Write `.last-collected` only if at least one source succeeded:
 
 ```bash
 date -u +%Y-%m-%dT%H:%M:%SZ > /workspace/group/marketing/data/.last-collected
 ```
 
+If ALL sources failed, skip this step and tell the user the cache was not updated.
+
 ---
 
-## Step 5 — Return summary
+## Step 7 — Return summary
 
 Report:
 
-- Counts per source
+- Counts per source (from `.collection-progress`)
 - Any failures (which fetcher failed and why)
 - Whether transcription was enabled
 - Reminder: "Run `/linkedin-topic-scout` to generate topic ideas."
@@ -138,6 +191,8 @@ Report:
       pillars-claims.md
       voice-hebrew-style.md
   data/
+    .collection-progress     ← append-only: per-source results from last run
+    .last-collected          ← ISO timestamp of last successful collection
     newsletters/latest.json  ← {collectedAt, feeds:[{id,name,items:[{title,url}]}]}
     newsletters/latest.md
     geektime/latest.json     ← {collectedAt, articles:[{category,title,url}]}
@@ -146,6 +201,14 @@ Report:
     podcasts/latest.md
     youtube/latest.json      ← {collectedAt, videos:[{id,title,url,channel,publishedAt,transcriptPreview}]}
     youtube/latest.md
-    .last-collected          ← ISO timestamp of last successful collection
-    whisper-cache/           ← faster-whisper model cache (auto-created)
+    whisper-cache/           ← faster-whisper model cache (auto-created, never auto-cleaned)
 ```
+
+## Temp/Cache Cleanup
+
+| File                        | When cleaned                                                                                             |
+| --------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `.collection-progress`      | Truncated at start of each run (`> file`), kept after success as lightweight index for downstream skills |
+| `tmp_*.mp3`                 | Cleaned inline by podcast script after transcription — no action needed                                  |
+| `whisper-cache/`            | **Never** auto-cleaned — models are expensive to re-download                                             |
+| `latest.json` / `latest.md` | Overwritten atomically by each run — no cleanup needed                                                   |
