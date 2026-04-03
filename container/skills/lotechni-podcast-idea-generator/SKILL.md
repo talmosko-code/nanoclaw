@@ -7,6 +7,18 @@ description: Generate and save a new episode idea for the "לא טכני ולא 
 
 Generate a new episode idea for "לא טכני ולא במקרה" and save it to Notion.
 
+## Workflow overview (phases)
+
+| Phase | Section | Purpose |
+|-------|---------|---------|
+| **Collect** | 1 | Raw idea from user |
+| **Enrich** | 2–3 | RSS context + structured episode fields |
+| **Write** | 4 | Create page in Episode Ideas DB |
+| **Verify** | 5 | Read-back: page exists, DB correct, properties + body |
+| **Return** | 6 | Reply with URL |
+
+Do **not** skip **Verify** after Notion create.
+
 ## Show Identity
 
 - **Show:** לא טכני ולא במקרה — soft skills and career coaching for developers
@@ -16,13 +28,11 @@ Generate a new episode idea for "לא טכני ולא במקרה" and save it to
 - **Tone:** Conversational, practical, honest, mentorship-flavored
 - **~45 episodes recorded**
 
-## Steps
-
-### 1. Collect
+## Phase: Collect — 1. Collect
 
 Ask the user for the episode idea — a story, a guest name, a subject, a raw note, anything. Accept it as-is and proceed.
 
-### 2. Learn from RSS
+## Phase: Enrich — 2. Learn from RSS
 
 Fetch the RSS feed to understand recent episodes and avoid duplication:
 
@@ -30,9 +40,15 @@ Fetch the RSS feed to understand recent episodes and avoid duplication:
 curl -s "https://anchor.fm/s/f01f6814/podcast/rss"
 ```
 
-Extract the last 5–10 episode titles and descriptions.
+**RSS failure policy:**
 
-### 3. Enrich
+- If `curl` fails (non-zero exit, no output, or obvious network error) → **STOP**; tell the user the feed could not be fetched and ask them to retry or paste recent episode titles manually.
+- If the response is **empty** or **not valid XML/RSS** → **STOP**; same message.
+- If the feed parses but has **no items** → **continue** with a **warning** that de-dup against recent episodes could not be verified; proceed with enrichment using show identity only.
+
+Otherwise extract the last 5–10 episode titles and descriptions.
+
+## Phase: Enrich — 3. Enrich
 
 Using the raw input + RSS learnings + show identity above, generate:
 
@@ -51,7 +67,7 @@ Using the raw input + RSS learnings + show identity above, generate:
   5. סגירה וקריאה לפעולה
   ```
 
-### 4. Save to Notion
+## Phase: Write — 4. Save to Notion
 
 Use the **notion-lotechni** MCP to create a page in the Episode Ideas DB.
 
@@ -62,6 +78,20 @@ Use the **notion-lotechni** MCP to create a page in the Episode Ideas DB.
 
 Create the page with all 8 properties filled + the ליינאפ מוצע as page body content.
 
-### 5. Return
+Save the **page ID or URL** returned by the create operation for Verify.
 
-Reply with the Notion page URL.
+If create returns an error → **STOP**; report the error and do not claim success.
+
+## Phase: Verify — 5. Confirm write (mandatory)
+
+Via **notion-lotechni** MCP:
+
+1. **Retrieve** the page by ID or URL from step 4.
+2. Confirm the page lives in **Episode Ideas** (not Episodes archive).
+3. Confirm all **8 properties** are present and non-empty where required, and the **ליינאפ מוצע** body exists in page content.
+
+If retrieve fails or any check fails → **STOP**; report what is missing. Do not return a URL as “success” until Verify passes.
+
+## Phase: Return — 6. Return
+
+Reply with the Notion page URL (only after Verify passed).
