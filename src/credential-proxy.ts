@@ -129,6 +129,12 @@ const PROVIDER_REGISTRY: Record<string, ProviderEntry> = {
     auth: 'bearer',
     envKey: 'MOONSHOT_API_KEY',
   },
+  /** OpenCode Zen — curated models (qwen3.6-plus-free, claude-sonnet-4-5, etc.) */
+  opencode: {
+    upstream: 'https://opencode.ai/zen',
+    auth: 'bearer',
+    envKey: 'OPENCODE_ZEN_API_KEY',
+  },
 };
 
 /** Resolve provider entry for AGENT_RUNNER=opencode mode. */
@@ -178,6 +184,7 @@ export function startCredentialProxy(
     'OPENCODE_PROVIDER_UPSTREAM_URL',
     'OPENCODE_PROVIDER_AUTH_STYLE',
     'OPENCODE_PROVIDER_API_KEY_ENV',
+    'OPENCODE_ZEN_API_KEY',
   ]);
 
   // Determine if we're routing an OpenCode non-Anthropic provider

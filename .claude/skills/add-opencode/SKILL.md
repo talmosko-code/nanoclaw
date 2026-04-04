@@ -97,7 +97,9 @@ Read the current `container/agent-runner/src/index.ts`. Find the `runQuery` func
 ```typescript
 import type { RunnerOptions, RunnerResult } from './types.js';
 
-export async function runAnthropicQuery(opts: RunnerOptions): Promise<RunnerResult> {
+export async function runAnthropicQuery(
+  opts: RunnerOptions,
+): Promise<RunnerResult> {
   // ... existing runQuery logic ...
 }
 ```
@@ -127,7 +129,10 @@ interface OcPart {
   text?: string;
 }
 
-function buildConfig(mcpServerPath: string, containerInput: ContainerInput): Record<string, unknown> {
+function buildConfig(
+  mcpServerPath: string,
+  containerInput: ContainerInput,
+): Record<string, unknown> {
   const provider = process.env.OPENCODE_PROVIDER || 'anthropic';
   const model = process.env.OPENCODE_MODEL;
   const smallModel = process.env.OPENCODE_SMALL_MODEL;
@@ -135,7 +140,9 @@ function buildConfig(mcpServerPath: string, containerInput: ContainerInput): Rec
   const proxyUrl = process.env.ANTHROPIC_BASE_URL;
 
   // Strip "provider/" prefix to get the bare model ID for the provider registry
-  const providerModelId = model ? model.replace(new RegExp(`^${provider}/`), '') : undefined;
+  const providerModelId = model
+    ? model.replace(new RegExp(`^${provider}/`), '')
+    : undefined;
 
   const providerOptions: Record<string, unknown> =
     provider === 'anthropic'
@@ -163,7 +170,16 @@ function buildConfig(mcpServerPath: string, containerInput: ContainerInput): Rec
   const settingsPath = '/home/node/.claude/settings.json';
   try {
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as {
-      mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; type?: string; url?: string }>;
+      mcpServers?: Record<
+        string,
+        {
+          command?: string;
+          args?: string[];
+          env?: Record<string, string>;
+          type?: string;
+          url?: string;
+        }
+      >;
     };
     for (const [name, cfg] of Object.entries(settings.mcpServers ?? {})) {
       if (cfg.command) {
@@ -211,13 +227,20 @@ export class OpenCodeRunner {
   private sessionId: string | undefined;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private constructor(client: any, server: { url: string; close(): void }, stream: AsyncGenerator<OcEvent>) {
+  private constructor(
+    client: any,
+    server: { url: string; close(): void },
+    stream: AsyncGenerator<OcEvent>,
+  ) {
     this.client = client;
     this.server = server;
     this.stream = stream;
   }
 
-  static async create(mcpServerPath: string, containerInput: ContainerInput): Promise<OpenCodeRunner> {
+  static async create(
+    mcpServerPath: string,
+    containerInput: ContainerInput,
+  ): Promise<OpenCodeRunner> {
     const config = buildConfig(mcpServerPath, containerInput);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { client, server } = await (createOpencode as any)({ config });
@@ -227,7 +250,13 @@ export class OpenCodeRunner {
   }
 
   async runQuery(opts: RunnerOptions): Promise<RunnerResult> {
-    const { prompt, sessionId: inputSessionId, onOutput, shouldClose, log } = opts;
+    const {
+      prompt,
+      sessionId: inputSessionId,
+      onOutput,
+      shouldClose,
+      log,
+    } = opts;
 
     if (!this.sessionId) {
       if (inputSessionId) {
@@ -236,7 +265,8 @@ export class OpenCodeRunner {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const sessResp = await (this.client as any).session.create();
         this.sessionId = sessResp.data?.id as string | undefined;
-        if (!this.sessionId) throw new Error('OpenCode: failed to create session');
+        if (!this.sessionId)
+          throw new Error('OpenCode: failed to create session');
         log(`OpenCode session created: ${this.sessionId}`);
       }
     }
@@ -257,7 +287,9 @@ export class OpenCodeRunner {
     let lastEventAt = Date.now();
     const timeoutCheck = setInterval(() => {
       if (Date.now() - lastEventAt > IDLE_TIMEOUT_MS) {
-        log(`OpenCode event timeout (${IDLE_TIMEOUT_MS}ms) — aborting session ${id}`);
+        log(
+          `OpenCode event timeout (${IDLE_TIMEOUT_MS}ms) — aborting session ${id}`,
+        );
         this.sessionId = undefined;
         this.server.close();
       }
@@ -270,13 +302,20 @@ export class OpenCodeRunner {
         const { value: ev, done } = await this.stream.next();
         if (done) break;
 
-        if (!ev?.type || ev.type === 'server.heartbeat' || ev.type === 'server.connected') continue;
+        if (
+          !ev?.type ||
+          ev.type === 'server.heartbeat' ||
+          ev.type === 'server.connected'
+        )
+          continue;
 
         lastEventAt = Date.now();
         log(`[ev] ${ev.type} ${JSON.stringify(ev.properties).slice(0, 200)}`);
 
         if (ev.type === 'message.updated') {
-          const info = ev.properties?.info as { id?: string; role?: string } | undefined;
+          const info = ev.properties?.info as
+            | { id?: string; role?: string }
+            | undefined;
           if (info?.id && info?.role) {
             roleByMessageId.set(info.id, info.role);
             lastMessageIdThisTurn = info.id;
@@ -299,7 +338,9 @@ export class OpenCodeRunner {
         }
 
         if (ev.type === 'session.error') {
-          const props = ev.properties as { sessionID?: string; error?: { data?: { message?: string } } } | undefined;
+          const props = ev.properties as
+            | { sessionID?: string; error?: { data?: { message?: string } } }
+            | undefined;
           const errMsg =
             props?.error?.data?.message ||
             JSON.stringify(props?.error) ||
@@ -332,7 +373,9 @@ export class OpenCodeRunner {
       onOutput({ status: 'success', result: resultText, newSessionId: id });
     }
 
-    log(`OpenCode query done. result_len=${resultText.length} closedDuringQuery=${closedDuringQuery}`);
+    log(
+      `OpenCode query done. result_len=${resultText.length} closedDuringQuery=${closedDuringQuery}`,
+    );
     return { newSessionId: id, closedDuringQuery };
   }
 
@@ -356,7 +399,13 @@ const agentRunner = process.env.AGENT_RUNNER || 'anthropic';
 if (agentRunner === 'opencode') {
   await runOpenCodeLoop(prompt, sessionId, containerInput, mcpServerPath);
 } else {
-  await runAnthropicLoop(prompt, sessionId, containerInput, mcpServerPath, sdkEnv);
+  await runAnthropicLoop(
+    prompt,
+    sessionId,
+    containerInput,
+    mcpServerPath,
+    sdkEnv,
+  );
 }
 ```
 
@@ -405,10 +454,13 @@ export const AGENT_RUNNER =
 In `src/credential-proxy.ts`, add a provider registry and routing logic for OpenCode:
 
 **Critical path bug fix:** change the upstream request path from:
+
 ```typescript
 path: req.url,
 ```
+
 to:
+
 ```typescript
 path: upstreamUrl.pathname.replace(/\/$/, '') + req.url,
 ```
@@ -422,12 +474,22 @@ Also add the `PROVIDER_REGISTRY` and `resolveOcProvider()` logic that routes bas
 **Pass OpenCode env vars to containers:**
 
 In `buildContainerArgs()`, add:
+
 ```typescript
-const envVars = readEnvFile(['AGENT_RUNNER', 'OPENCODE_PROVIDER', 'OPENCODE_MODEL', 'OPENCODE_SMALL_MODEL']);
-if (envVars.AGENT_RUNNER) args.push('-e', `AGENT_RUNNER=${envVars.AGENT_RUNNER}`);
-if (envVars.OPENCODE_PROVIDER) args.push('-e', `OPENCODE_PROVIDER=${envVars.OPENCODE_PROVIDER}`);
-if (envVars.OPENCODE_MODEL) args.push('-e', `OPENCODE_MODEL=${envVars.OPENCODE_MODEL}`);
-if (envVars.OPENCODE_SMALL_MODEL) args.push('-e', `OPENCODE_SMALL_MODEL=${envVars.OPENCODE_SMALL_MODEL}`);
+const envVars = readEnvFile([
+  'AGENT_RUNNER',
+  'OPENCODE_PROVIDER',
+  'OPENCODE_MODEL',
+  'OPENCODE_SMALL_MODEL',
+]);
+if (envVars.AGENT_RUNNER)
+  args.push('-e', `AGENT_RUNNER=${envVars.AGENT_RUNNER}`);
+if (envVars.OPENCODE_PROVIDER)
+  args.push('-e', `OPENCODE_PROVIDER=${envVars.OPENCODE_PROVIDER}`);
+if (envVars.OPENCODE_MODEL)
+  args.push('-e', `OPENCODE_MODEL=${envVars.OPENCODE_MODEL}`);
+if (envVars.OPENCODE_SMALL_MODEL)
+  args.push('-e', `OPENCODE_SMALL_MODEL=${envVars.OPENCODE_SMALL_MODEL}`);
 if (envVars.AGENT_RUNNER === 'opencode') {
   args.push('-e', 'XDG_DATA_HOME=/home/node/.local/share');
 }
@@ -436,12 +498,22 @@ if (envVars.AGENT_RUNNER === 'opencode') {
 **Add OpenCode session persistence mount:**
 
 In `buildVolumeMounts()`, add a per-group volume for OpenCode session data:
+
 ```typescript
 if (envVars.AGENT_RUNNER === 'opencode') {
-  const groupOpencodeDir = path.join(DATA_DIR, 'sessions', group.folder, 'opencode');
+  const groupOpencodeDir = path.join(
+    DATA_DIR,
+    'sessions',
+    group.folder,
+    'opencode',
+  );
   fs.mkdirSync(groupOpencodeDir, { recursive: true });
   // ensure node user can write
-  try { fs.chownSync(groupOpencodeDir, 1000, 1000); } catch { fs.chmodSync(groupOpencodeDir, 0o777); }
+  try {
+    fs.chownSync(groupOpencodeDir, 1000, 1000);
+  } catch {
+    fs.chmodSync(groupOpencodeDir, 0o777);
+  }
   mounts.push({
     hostPath: groupOpencodeDir,
     containerPath: '/home/node/.local/share/opencode',
@@ -460,12 +532,16 @@ if (fs.existsSync(claudeJsonPath)) {
   try {
     const claudeJson = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8'));
     const projectMcps = claudeJson.projects?.[process.cwd()]?.mcpServers ?? {};
-    for (const [name, cfg] of Object.entries(projectMcps) as Array<[string, Record<string, unknown>]>) {
+    for (const [name, cfg] of Object.entries(projectMcps) as Array<
+      [string, Record<string, unknown>]
+    >) {
       if (cfg.command) {
         mcpServers[name] = cfg; // pass through Claude Code format; opencode.ts translates at runtime
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 ```
 
@@ -482,7 +558,9 @@ import { AGENT_RUNNER } from './config.js';
 const rawSessionId = sessions[group.folder];
 const isOpencodeSession = rawSessionId?.startsWith('ses_');
 const sessionId =
-  (AGENT_RUNNER === 'opencode') === isOpencodeSession ? rawSessionId : undefined;
+  (AGENT_RUNNER === 'opencode') === isOpencodeSession
+    ? rawSessionId
+    : undefined;
 ```
 
 OpenCode session IDs start with `ses_`; Anthropic/Claude Code session IDs are UUIDs. This makes switching `AGENT_RUNNER` in `.env` + restarting seamless — no manual DB cleanup needed.
@@ -548,21 +626,68 @@ OPENROUTER_API_KEY=sk-or-v1-...
 
 Ask the user which provider they want. Supported providers out of the box (key env vars in parentheses):
 
-| Provider | `OPENCODE_PROVIDER` | API Key Env Var |
-|----------|--------------------|-----------------| 
-| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` |
-| OpenRouter | `openrouter` | `OPENROUTER_API_KEY` |
-| OpenAI | `openai` | `OPENAI_API_KEY` |
-| Google Gemini | `google` | `GOOGLE_GENERATIVE_AI_API_KEY` |
-| DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` |
-| Groq | `groq` | `GROQ_API_KEY` |
-| Mistral | `mistral` | `MISTRAL_API_KEY` |
-| xAI Grok | `xai` | `XAI_API_KEY` |
-| Together AI | `together` | `TOGETHER_API_KEY` |
-| Fireworks | `fireworks` | `FIREWORKS_API_KEY` |
-| Cohere | `cohere` | `COHERE_API_KEY` |
+| Provider         | `OPENCODE_PROVIDER` | API Key Env Var                |
+| ---------------- | ------------------- | ------------------------------ |
+| Anthropic        | `anthropic`         | `ANTHROPIC_API_KEY`            |
+| OpenRouter       | `openrouter`        | `OPENROUTER_API_KEY`           |
+| OpenAI           | `openai`            | `OPENAI_API_KEY`               |
+| Google Gemini    | `google`            | `GOOGLE_GENERATIVE_AI_API_KEY` |
+| DeepSeek         | `deepseek`          | `DEEPSEEK_API_KEY`             |
+| Groq             | `groq`              | `GROQ_API_KEY`                 |
+| Mistral          | `mistral`           | `MISTRAL_API_KEY`              |
+| xAI Grok         | `xai`               | `XAI_API_KEY`                  |
+| Together AI      | `together`          | `TOGETHER_API_KEY`             |
+| Fireworks        | `fireworks`         | `FIREWORKS_API_KEY`            |
+| Cohere           | `cohere`            | `COHERE_API_KEY`               |
+| Moonshot (Kimi)  | `moonshot`          | `MOONSHOT_API_KEY`             |
+| **OpenCode Zen** | `opencode`          | `OPENCODE_ZEN_API_KEY`         |
+
+### OpenCode Zen
+
+OpenCode Zen is a curated model gateway by the OpenCode team. Models are tested and verified to work well as coding agents.
+
+**Setup:**
+
+1. Sign up at https://opencode.ai/auth
+2. Add billing details and copy your API key
+3. Set in `.env`:
+   ```bash
+   OPENCODE_PROVIDER=opencode
+   OPENCODE_MODEL=opencode/qwen3.6-plus-free
+   OPENCODE_SMALL_MODEL=opencode/qwen3.6-plus-free
+   OPENCODE_ZEN_API_KEY=your-zen-api-key
+   ```
+
+**Free models:**
+| Model ID | Description |
+|----------|-------------|
+| `qwen3.6-plus-free` | Qwen 3.6 Plus — capable general-purpose model |
+| `nemotron-3-super-free` | NVIDIA Nemotron 3 Super |
+| `minimax-m2.5-free` | MiniMax M2.5 |
+| `mimo-v2-pro-free` | MiMo V2 Pro |
+| `mimo-v2-omni-free` | MiMo V2 Omni |
+| `big-pickle` | Stealth model (identity unknown) |
+
+**Paid models** (per-request pricing, auto-reload at $5 balance):
+
+- Claude: `claude-sonnet-4-5`, `claude-sonnet-4-6`, `claude-opus-4-5`, `claude-opus-4-6`, `claude-haiku-4-5`
+- GPT: `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.3-codex`, `gpt-5.2`, `gpt-5.2-codex`
+- Gemini: `gemini-3.1-pro`, `gemini-3-flash`
+- Other: `kimi-k2.5`, `glm-5`, `minimax-m2.5`
+
+Full list and pricing: https://opencode.ai/docs/zen/
+
+**Endpoint routing:** Zen uses different endpoints per model type:
+
+- OpenAI-compatible (`qwen`, `kimi`, `glm`, `minimax`): `/v1/chat/completions`
+- Anthropic (`claude-*`): `/v1/messages`
+- OpenAI (`gpt-*`): `/v1/responses`
+- Google (`gemini-*`): `/v1/models/{model}`
+
+The credential proxy forwards all paths correctly since it prepends the upstream base URL to the request path.
 
 For any unlisted provider, use the escape hatch:
+
 ```bash
 OPENCODE_PROVIDER_UPSTREAM_URL=https://api.custom.com/v1
 OPENCODE_PROVIDER_AUTH_STYLE=bearer
@@ -571,6 +696,7 @@ CUSTOM_API_KEY=your-key-here
 ```
 
 **Model format:** always `provider/model-id`. Examples:
+
 - `openrouter/qwen/qwen3.5-flash-02-23`
 - `openrouter/anthropic/claude-haiku-4.5`
 - `openai/gpt-4o-mini`
@@ -600,6 +726,7 @@ docker logs $(docker ps --format '{{.Names}}' | grep nanoclaw | head -1)
 ```
 
 Key log lines to look for:
+
 - `[agent-runner] Initializing OpenCode runner...` — runner selected correctly
 - `[agent-runner] OpenCode session created: ses_...` — session started
 - `[agent-runner] OpenCode session idle` — response received
@@ -633,7 +760,7 @@ The proxy's `path: req.url` only forwards the request path, discarding the upstr
 
 ### 3. `message.part.updated` fires before `message.updated`
 
-Streaming text parts arrive *before* the message's role (`assistant` / `user`) is set. If you filter `part.updated` events by role eagerly, you miss all text and get empty results. **Fix**: buffer all text parts keyed by `messageID`, then resolve roles from `message.updated` events, and collect the final text only at `session.idle`.
+Streaming text parts arrive _before_ the message's role (`assistant` / `user`) is set. If you filter `part.updated` events by role eagerly, you miss all text and get empty results. **Fix**: buffer all text parts keyed by `messageID`, then resolve roles from `message.updated` events, and collect the final text only at `session.idle`.
 
 ### 4. Stale session IDs break the opposite runner
 
@@ -755,6 +882,78 @@ if (secrets.OPENCODE_PROVIDER === 'openrouter') {
 
 ---
 
+## Adding a New Provider
+
+The credential proxy has a built-in `PROVIDER_REGISTRY` in `src/credential-proxy.ts`. Adding a new provider requires **two steps** — no code changes to the runner or container are needed.
+
+### Step 1: Add to PROVIDER_REGISTRY
+
+In `src/credential-proxy.ts`, add an entry to the `PROVIDER_REGISTRY` object:
+
+```typescript
+myprovider: {
+  upstream: 'https://api.myprovider.com/v1',
+  auth: 'bearer',           // 'bearer' | 'x-api-key' | 'goog-key'
+  envKey: 'MYPROVIDER_API_KEY',
+},
+```
+
+| Field      | Description                                                                                                                                                            |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `upstream` | The base URL of the provider's API. The proxy prepends this to the incoming request path. For OpenAI-compatible APIs, this is typically `https://api.provider.com/v1`. |
+| `auth`     | How the API key should be sent. `bearer` → `Authorization: Bearer <key>`, `x-api-key` → `x-api-key: <key>`, `goog-key` → `x-goog-api-key: <key>`.                      |
+| `envKey`   | The name of the env var in `.env` that holds the real API key.                                                                                                         |
+
+### Step 2: Add to .env
+
+```bash
+OPENCODE_PROVIDER=myprovider
+OPENCODE_MODEL=myprovider/model-name
+OPENCODE_SMALL_MODEL=myprovider/model-name
+MYPROVIDER_API_KEY=your-key-here
+```
+
+### Step 3: Rebuild and restart
+
+```bash
+npm run build
+systemctl restart nanoclaw
+```
+
+### Unlisted providers (escape hatch — no code change needed)
+
+For providers you don't want to add to the registry, use the escape hatch in `.env`:
+
+```bash
+OPENCODE_PROVIDER=custom
+OPENCODE_MODEL=custom/some-model
+OPENCODE_PROVIDER_UPSTREAM_URL=https://api.custom.com/v1
+OPENCODE_PROVIDER_AUTH_STYLE=bearer
+OPENCODE_PROVIDER_API_KEY_ENV=CUSTOM_API_KEY
+CUSTOM_API_KEY=your-key-here
+```
+
+### How it works
+
+1. The OpenCode runner sends all API requests to `ANTHROPIC_BASE_URL` (the credential proxy) with a placeholder key
+2. The proxy looks up the provider in `PROVIDER_REGISTRY` (or uses escape-hatch env vars)
+3. It strips the placeholder auth, injects the real key from `.env`, and forwards to the actual upstream
+4. The container never sees real credentials
+
+### Provider endpoint compatibility
+
+Most LLM providers offer an **OpenAI-compatible** endpoint at `/v1/chat/completions`. These work out of the box with `auth: 'bearer'`:
+
+- OpenRouter, OpenAI, DeepSeek, Groq, Mistral, xAI, Together, Fireworks, Cohere, Perplexity, Cerebras, SambaNova, Moonshot
+
+Providers with **different auth styles**:
+
+- Anthropic: `x-api-key` header at `https://api.anthropic.com`
+- Google AI Studio: `goog-key` (`x-goog-api-key`) — but note Google's native API is NOT OpenAI-compatible; use the `/v1beta/openai` endpoint with `bearer` auth instead
+- OpenCode Zen: `bearer` auth at `https://opencode.ai/zen` (routes to different sub-endpoints per model type)
+
+---
+
 ## Architecture Notes
 
 **Security**: API keys never enter the container. The container always sends requests to the credential proxy at `ANTHROPIC_BASE_URL` (the host's docker bridge IP). The proxy injects the real key and forwards to the actual LLM API.
@@ -762,5 +961,9 @@ if (secrets.OPENCODE_PROVIDER === 'openrouter') {
 **Sessions**: OpenCode sessions persist on disk at `data/sessions/<group>/opencode/` (mounted into the container). This gives the agent per-group memory across container restarts, identical to how Anthropic sessions work.
 
 **MCPs**: Any MCP added via `claude mcp add` in the nanoclaw project directory is automatically bridged to OpenCode. Local stdio MCPs (`command`/`args`/`env` format) are translated to OpenCode's `McpLocalConfig`; HTTP MCPs are translated to `McpRemoteConfig`. No extra config needed.
+
+**Skills**: NanoClaw syncs all skills from `container/skills/` into each group's session directory at `data/sessions/<group>/skills/`. This directory is mounted into the container at `/home/node/.claude/skills/`. OpenCode discovers these skills automatically via its `.claude/skills/*/SKILL.md` discovery path. Skills are available to the agent through the native `skill` tool — no extra config needed. To add a new skill, create a folder under `container/skills/<name>/SKILL.md` and it will be synced to all groups on next container spawn.
+
+**CLAUDE.md**: Each group has its own `CLAUDE.md` at `groups/<group>/CLAUDE.md` (e.g. `groups/telegram_main/CLAUDE.md`). This is mounted into the container at `/workspace/group/CLAUDE.md`. The OpenCode runner reads this file at the start of the first query and prepends it to the prompt inside `<system>` tags. Non-main groups also get the global `groups/global/CLAUDE.md` appended. This gives each group its own identity, formatting rules, and behavioral instructions.
 
 **SSE stream**: The event stream is created once per container lifecycle and reused across all IPC follow-up messages. Manual `.next()` iteration (not `for-await`) is used to prevent the stream from closing between queries.
