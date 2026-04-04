@@ -4,6 +4,7 @@ import path from 'path';
 import { OneCLI } from '@onecli-sh/sdk';
 
 import {
+  AGENT_RUNNER,
   ASSISTANT_NAME,
   DEFAULT_TRIGGER,
   getTriggerPattern,
@@ -343,7 +344,27 @@ async function runAgent(
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
-  const sessionId = sessions[group.folder];
+
+  // Cross-runner session guard: discard session IDs belonging to the wrong runner.
+  // OpenCode session IDs start with 'ses_'; Anthropic/Claude Code IDs are UUIDs.
+  // This makes switching AGENT_RUNNER seamless — no manual DB cleanup needed.
+  const effectiveRunner = group.containerConfig?.agentRunner || AGENT_RUNNER;
+  const rawSessionId = sessions[group.folder];
+  const isOpencodeSession = rawSessionId?.startsWith('ses_');
+  const sessionId =
+    (effectiveRunner === 'opencode') === isOpencodeSession
+      ? rawSessionId
+      : undefined;
+  if (rawSessionId && !sessionId) {
+    logger.info(
+      {
+        group: group.name,
+        staleSession: rawSessionId,
+        runner: effectiveRunner,
+      },
+      'Discarded stale session ID from different runner',
+    );
+  }
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();

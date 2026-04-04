@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  AGENT_RUNNER,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -16,6 +17,7 @@ import {
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
+import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -239,10 +241,33 @@ function buildVolumeMounts(
     mounts.push(...validatedMounts);
   }
 
+  // OpenCode session persistence mount (per-group)
+  const effectiveRunner = group.containerConfig?.agentRunner || AGENT_RUNNER;
+  if (effectiveRunner === 'opencode') {
+    const groupOpencodeDir = path.join(
+      DATA_DIR,
+      'sessions',
+      group.folder,
+      'opencode',
+    );
+    fs.mkdirSync(groupOpencodeDir, { recursive: true });
+    try {
+      fs.chownSync(groupOpencodeDir, 1000, 1000);
+    } catch {
+      fs.chmodSync(groupOpencodeDir, 0o777);
+    }
+    mounts.push({
+      hostPath: groupOpencodeDir,
+      containerPath: '/home/node/.local/share/opencode',
+      readonly: false,
+    });
+  }
+
   return mounts;
 }
 
 async function buildContainerArgs(
+  group: RegisteredGroup,
   mounts: VolumeMount[],
   containerName: string,
   agentIdentifier?: string,
@@ -251,6 +276,31 @@ async function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Pass agent runner selection (per-group override or global default)
+  const effectiveRunner = group.containerConfig?.agentRunner || AGENT_RUNNER;
+  args.push('-e', `AGENT_RUNNER=${effectiveRunner}`);
+
+  // Pass OpenCode provider/model env vars when using opencode runner
+  if (effectiveRunner === 'opencode') {
+    const envVars = readEnvFile([
+      'OPENCODE_PROVIDER',
+      'OPENCODE_MODEL',
+      'OPENCODE_SMALL_MODEL',
+    ]);
+    if (envVars.OPENCODE_PROVIDER)
+      args.push('-e', `OPENCODE_PROVIDER=${envVars.OPENCODE_PROVIDER}`);
+    if (envVars.OPENCODE_MODEL)
+      args.push('-e', `OPENCODE_MODEL=${envVars.OPENCODE_MODEL}`);
+    if (envVars.OPENCODE_SMALL_MODEL)
+      args.push('-e', `OPENCODE_SMALL_MODEL=${envVars.OPENCODE_SMALL_MODEL}`);
+    args.push('-e', 'XDG_DATA_HOME=/home/node/.local/share');
+    // Exclude localhost from OneCLI proxy — OpenCode runs its own local
+    // server at 127.0.0.1:4096 that the SDK must reach directly.
+    // Without this, the proxy intercepts and closes the connection (ECONNRESET).
+    args.push('-e', 'NO_PROXY=127.0.0.1,localhost');
+    args.push('-e', 'no_proxy=127.0.0.1,localhost');
+  }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
@@ -312,6 +362,7 @@ export async function runContainerAgent(
     ? undefined
     : group.folder.toLowerCase().replace(/_/g, '-');
   const containerArgs = await buildContainerArgs(
+    group,
     mounts,
     containerName,
     agentIdentifier,
