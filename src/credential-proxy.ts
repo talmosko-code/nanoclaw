@@ -69,8 +69,8 @@ const PROVIDER_REGISTRY: Record<string, ProviderEntry> = {
     envKey: 'OPENROUTER_API_KEY',
   },
   google: {
-    upstream: 'https://generativelanguage.googleapis.com/v1beta',
-    auth: 'goog-key',
+    upstream: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    auth: 'bearer',
     envKey: 'GOOGLE_GENERATIVE_AI_API_KEY',
   },
   deepseek: {
