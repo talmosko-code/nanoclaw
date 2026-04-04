@@ -27,7 +27,10 @@ export interface AllowedRoot {
   description?: string;
 }
 
+export type AgentRunner = 'anthropic' | 'opencode';
+
 export interface ContainerConfig {
+  agentRunner?: AgentRunner; // Per-group agent runner selection
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
 }
