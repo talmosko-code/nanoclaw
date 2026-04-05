@@ -272,7 +272,8 @@ function buildVolumeMounts(
   // Per-group OpenCode session data directory.
   // Mounted at XDG_DATA_HOME/opencode so sessions persist across container restarts.
   // Only created/mounted when AGENT_RUNNER=opencode to avoid unnecessary dirs.
-  const effectiveMountRunner = group.containerConfig?.agentRunner || AGENT_RUNNER;
+  const effectiveMountRunner =
+    group.containerConfig?.agentRunner || AGENT_RUNNER;
   if (effectiveMountRunner === 'opencode') {
     const groupOpencodeDir = path.join(
       DATA_DIR,
