@@ -2,7 +2,40 @@ import * as fs from 'fs';
 
 import { createOpencode } from '@opencode-ai/sdk';
 
-import type { ContainerInput, RunnerOptions, RunnerResult } from './types.js';
+interface ContainerInput {
+  prompt: string;
+  sessionId?: string;
+  groupFolder: string;
+  chatJid: string;
+  isMain: boolean;
+  isScheduledTask?: boolean;
+  assistantName?: string;
+  script?: string;
+}
+
+interface RunnerOptions {
+  prompt: string;
+  sessionId?: string;
+  containerInput: ContainerInput;
+  mcpServerPath: string;
+  sdkEnv: Record<string, string | undefined>;
+  resumeAt?: string;
+  onOutput: (output: {
+    status: 'success' | 'error';
+    result: string | null;
+    newSessionId?: string;
+    error?: string;
+  }) => void;
+  shouldClose: () => boolean;
+  drainIpcInput: () => string[];
+  log: (msg: string) => void;
+}
+
+interface RunnerResult {
+  newSessionId?: string;
+  lastAssistantUuid?: string;
+  closedDuringQuery: boolean;
+}
 
 // Event types emitted by the OpenCode SSE stream (subset we care about)
 interface OcEvent {
@@ -146,8 +179,6 @@ export class OpenCodeRunner {
   private server: { url: string; close(): void };
   private stream: AsyncGenerator<OcEvent>;
   private sessionId: string | undefined;
-  private claudeMdInjected = false;
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private constructor(client: any, server: { url: string; close(): void }, stream: AsyncGenerator<OcEvent>) {
     this.client = client;
@@ -187,18 +218,12 @@ export class OpenCodeRunner {
     }
     const id = this.sessionId;
 
-    // On the first query of a new session, prepend the group's CLAUDE.md so the agent
-    // gets its identity/instructions. Claude Code reads this automatically from cwd;
-    // OpenCode has no such mechanism, so we inject it explicitly.
-    let effectivePrompt = prompt;
-    if (!this.claudeMdInjected) {
-      const claudeMd = readClaudeMd(opts.containerInput);
-      if (claudeMd) {
-        effectivePrompt = `<system>\n${claudeMd}\n</system>\n\n${prompt}`;
-        log(`Injected CLAUDE.md context (${claudeMd.length} chars)`);
-      }
-      this.claudeMdInjected = true;
-    }
+    // Re-read CLAUDE.md on every query (unlike Claude Code which does this
+    // automatically, OpenCode needs us to inject it each time).
+    const claudeMd = readClaudeMd(opts.containerInput);
+    const effectivePrompt = claudeMd
+      ? `<system>\n${claudeMd}\n</system>\n\n${prompt}`
+      : prompt;
 
     // Send prompt asynchronously — returns immediately (HTTP 204), agent runs in background
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

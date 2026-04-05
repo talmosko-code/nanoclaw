@@ -46,6 +46,7 @@ import {
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
+  deleteSession,
   getAllTasks,
   getLastBotMessageTimestamp,
   getMessagesSince,
@@ -55,7 +56,6 @@ import {
   setRegisteredGroup,
   setRouterState,
   setSession,
-  deleteSession,
   storeChatMetadata,
   storeMessage,
 } from './db.js';
@@ -74,6 +74,7 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import { startSessionCleanup } from './session-cleanup.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -373,14 +374,22 @@ async function runAgent(
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
-  // Discard session IDs that belong to a different runner to avoid cross-runner confusion.
-  // OpenCode sessions start with "ses_"; Anthropic/Claude Code sessions are UUIDs.
+  // Cross-runner session guard: discard session IDs belonging to the wrong runner.
+  // OpenCode session IDs start with 'ses_'; Anthropic/Claude Code IDs are UUIDs.
+  // This makes switching AGENT_RUNNER seamless — no manual DB cleanup needed.
+  const effectiveRunner = group.containerConfig?.agentRunner || AGENT_RUNNER;
   const rawSessionId = sessions[group.folder];
   const isOpencodeSession = rawSessionId?.startsWith('ses_');
   const sessionId =
-    (AGENT_RUNNER === 'opencode') === isOpencodeSession
+    (effectiveRunner === 'opencode') === isOpencodeSession
       ? rawSessionId
       : undefined;
+  if (rawSessionId && !sessionId) {
+    logger.info(
+      { group: group.name, staleSessionId: rawSessionId, effectiveRunner },
+      'Cross-runner session discarded — runner switched',
+    );
+  }
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -441,19 +450,27 @@ async function runAgent(
     }
 
     if (output.status === 'error') {
-      // Stale session (e.g. after service restart) — clear and retry once without it
-      if (
-        output.error?.includes('No conversation found with session ID') &&
-        sessions[group.folder]
-      ) {
+      // Detect stale/corrupt session — clear it so the next retry starts fresh.
+      // The session .jsonl can go missing after a crash mid-write, manual
+      // deletion, or disk-full. The existing backoff in group-queue.ts
+      // handles the retry; we just need to remove the broken session ID.
+      const isStaleSession =
+        sessionId &&
+        output.error &&
+        /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
+          output.error,
+        );
+
+      if (isStaleSession) {
         logger.warn(
-          { group: group.name },
-          'Stale session ID detected — clearing and retrying',
+          { group: group.name, staleSessionId: sessionId, error: output.error },
+          'Stale session detected — clearing for next retry',
         );
         delete sessions[group.folder];
         deleteSession(group.folder);
-        return runAgent(group, prompt, chatJid, onOutput);
       }
+
+
       logger.error(
         { group: group.name, error: output.error },
         'Container agent error',
@@ -780,6 +797,7 @@ async function main(): Promise<void> {
       }
     },
   });
+  startSessionCleanup();
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
   startMessageLoop().catch((err) => {

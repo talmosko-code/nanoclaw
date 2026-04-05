@@ -27,7 +27,10 @@ export interface AllowedRoot {
   description?: string;
 }
 
+export type AgentRunner = 'anthropic' | 'opencode';
+
 export interface ContainerConfig {
+  agentRunner?: AgentRunner; // Per-group agent runner selection
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
   ownerBypass?: boolean; // Default: true — set to false to require trigger even from owner
@@ -54,6 +57,9 @@ export interface NewMessage {
   is_from_me?: boolean;
   is_bot_message?: boolean;
   thread_id?: number; // Forum topic thread ID (Telegram topics / Discord threads)
+  reply_to_message_id?: string;
+  reply_to_message_content?: string;
+  reply_to_sender_name?: string;
 }
 
 export interface ScheduledTask {
