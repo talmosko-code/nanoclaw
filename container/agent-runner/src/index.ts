@@ -875,14 +875,22 @@ async function runOpenCodeLoop(
         log,
       });
 
-      if (result.newSessionId) sessionId = result.newSessionId;
+      if (result.newSessionId) {
+        sessionId = result.newSessionId;
+      } else if (!result.closedDuringQuery) {
+        // Query errored: clear stale session so next query starts fresh
+        sessionId = undefined;
+      }
 
       if (result.closedDuringQuery) {
         log('Close sentinel consumed during OpenCode query, exiting');
         break;
       }
 
-      writeOutput({ status: 'success', result: null, newSessionId: sessionId });
+      // Only emit session update on success (don't re-store a broken session ID)
+      if (result.newSessionId) {
+        writeOutput({ status: 'success', result: null, newSessionId: sessionId });
+      }
 
       log('OpenCode query ended, waiting for next IPC message...');
       const nextMessage = await waitForIpcMessage();
