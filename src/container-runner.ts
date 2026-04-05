@@ -539,7 +539,12 @@ export async function runContainerAgent(
   const agentIdentifier = input.isMain
     ? undefined
     : group.folder.toLowerCase().replace(/_/g, '-');
-  const containerArgs = await buildContainerArgs(group, mounts, containerName, agentIdentifier);
+  const containerArgs = await buildContainerArgs(
+    group,
+    mounts,
+    containerName,
+    agentIdentifier,
+  );
 
   logger.debug(
     {
