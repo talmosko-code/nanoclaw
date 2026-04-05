@@ -295,9 +295,12 @@ async function buildContainerArgs(
     if (envVars.OPENCODE_SMALL_MODEL)
       args.push('-e', `OPENCODE_SMALL_MODEL=${envVars.OPENCODE_SMALL_MODEL}`);
     args.push('-e', 'XDG_DATA_HOME=/home/node/.local/share');
-    // Exclude localhost from OneCLI proxy — OpenCode runs its own local
-    // server at 127.0.0.1:4096 that the SDK must reach directly.
-    // Without this, the proxy intercepts and closes the connection (ECONNRESET).
+    // OpenCode runs its own local gRPC/HTTP server at 127.0.0.1:4096 and the
+    // SDK must reach it directly — bypassing OneCLI's MITM proxy.
+    // NO_PROXY tells standard HTTP clients to skip the proxy for loopback traffic.
+    // TODO: OneCLI may bind to different addresses per OS; coordinate with the
+    // OneCLI team to find a proper first-class way to exclude localhost rather
+    // than relying on NO_PROXY (tracked: cc @guyb1).
     args.push('-e', 'NO_PROXY=127.0.0.1,localhost');
     args.push('-e', 'no_proxy=127.0.0.1,localhost');
   }

@@ -30,7 +30,10 @@ export interface AllowedRoot {
 export type AgentRunner = 'anthropic' | 'opencode';
 
 export interface ContainerConfig {
-  agentRunner?: AgentRunner; // Per-group agent runner selection
+  // Per-group agent runner override. Set at registration time via the
+  // register_group IPC command: { type: 'register_group', ..., containerConfig: { agentRunner: 'opencode' } }
+  // Falls back to the global AGENT_RUNNER env var when absent.
+  agentRunner?: AgentRunner;
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
 }
