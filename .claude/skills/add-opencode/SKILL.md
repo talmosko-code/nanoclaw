@@ -1,25 +1,21 @@
 ---
 name: add-opencode
-description: Add OpenCode SDK as an alternative agent backend to NanoClaw. Lets you run any LLM provider (OpenRouter, OpenAI, Google, DeepSeek, etc.) instead of the Anthropic SDK. Switch between runners via AGENT_RUNNER in .env with no code changes.
+description: Add OpenCode SDK as an alternative agent backend to NanoClaw. Lets you run any LLM provider (OpenRouter, OpenAI, Google, DeepSeek, etc.) instead of the Anthropic SDK. Switch between runners via AGENT_RUNNER in .env or per-group in container config.
 ---
 
 # Add OpenCode Runner
 
-This skill adds [OpenCode SDK](https://github.com/anomalyco/opencode) as a second agent backend alongside the existing Anthropic/Claude Code runner. After applying, you can switch providers by editing `.env` and restarting — no rebuild required.
+This skill adds [OpenCode SDK](https://github.com/anomalyco/opencode) as an alternative agent backend. After applying, you can switch providers per-group or globally by editing `.env` — no rebuild required (except the initial container rebuild).
 
 ## What it does
 
-- Adds `container/agent-runner/src/runners/opencode.ts` — the OpenCode runner
-- Adds `container/agent-runner/src/runners/types.ts` — shared runner interfaces
-- Refactors `container/agent-runner/src/runners/anthropic.ts` — extracts existing Anthropic logic
-- Updates `container/agent-runner/src/index.ts` — dispatches by `AGENT_RUNNER`
+- Adds `container/agent-runner/src/runners/opencode.ts` — the OpenCode runner (new file)
+- Updates `container/agent-runner/src/index.ts` — dispatches by `AGENT_RUNNER` env var; Anthropic code stays inline (minimal change)
 - Updates `container/agent-runner/package.json` — adds `@opencode-ai/sdk`
-- Updates `container/Dockerfile` — installs `opencode-ai` globally
-- Updates `src/credential-proxy.ts` — routes non-Anthropic provider traffic + fixes path bug
-- Updates `src/container-runner.ts` — passes OC env vars, adds session mount, bridges MCPs
+- Updates `container/Dockerfile` — installs `opencode-ai` globally + XDG dirs
+- Updates `src/types.ts` — adds shared `AgentRunner` type and per-group `agentRunner` in `ContainerConfig`
 - Updates `src/config.ts` — exports `AGENT_RUNNER`
-- Updates `src/index.ts` — auto-discards incompatible session IDs on runner switch
-- Documents new variables in `.env`
+- Updates `src/container-runner.ts` — passes OpenCode env vars, adds session mount
 
 ## Phase 1: Pre-flight
 
@@ -41,12 +37,18 @@ This skill requires NanoClaw ≥ 1.2.0 (container runner architecture). If older
 
 ## Phase 2: Apply Code Changes
 
-### 2a. Create shared runner types
+### 2a. Create the OpenCode runner
 
-Create `container/agent-runner/src/runners/types.ts`:
+```bash
+mkdir -p container/agent-runner/src/runners
+```
+
+Create `container/agent-runner/src/runners/opencode.ts`:
 
 ```typescript
-export interface ContainerInput {
+import * as fs from 'fs';
+
+interface ContainerInput {
   prompt: string;
   sessionId?: string;
   groupFolder: string;
@@ -57,65 +59,29 @@ export interface ContainerInput {
   script?: string;
 }
 
-export interface ContainerOutput {
-  status: 'success' | 'error';
-  result: string | null;
-  newSessionId?: string;
-  error?: string;
-}
-
-export interface RunnerOptions {
+interface RunnerOptions {
   prompt: string;
   sessionId?: string;
   containerInput: ContainerInput;
   mcpServerPath: string;
   sdkEnv: Record<string, string | undefined>;
   resumeAt?: string;
-  onOutput: (output: ContainerOutput) => void;
+  onOutput: (output: {
+    status: 'success' | 'error';
+    result: string | null;
+    newSessionId?: string;
+    error?: string;
+  }) => void;
   shouldClose: () => boolean;
   drainIpcInput: () => string[];
   log: (msg: string) => void;
 }
 
-export interface RunnerResult {
+interface RunnerResult {
   newSessionId?: string;
   lastAssistantUuid?: string;
   closedDuringQuery: boolean;
 }
-```
-
-Create the runners directory if it doesn't exist:
-
-```bash
-mkdir -p container/agent-runner/src/runners
-```
-
-### 2b. Extract Anthropic runner
-
-Read the current `container/agent-runner/src/index.ts`. Find the `runQuery` function and `MessageStream` class that implement the Anthropic runner. Move them into a new file `container/agent-runner/src/runners/anthropic.ts` with this signature:
-
-```typescript
-import type { RunnerOptions, RunnerResult } from './types.js';
-
-export async function runAnthropicQuery(
-  opts: RunnerOptions,
-): Promise<RunnerResult> {
-  // ... existing runQuery logic ...
-}
-```
-
-Keep `index.ts` importing and calling `runAnthropicQuery` as before. Import types from `./runners/types.js` instead of defining them inline.
-
-### 2c. Create the OpenCode runner
-
-Create `container/agent-runner/src/runners/opencode.ts`:
-
-```typescript
-import * as fs from 'fs';
-
-import { createOpencode } from '@opencode-ai/sdk';
-
-import type { ContainerInput, RunnerOptions, RunnerResult } from './types.js';
 
 interface OcEvent {
   type: string;
@@ -129,6 +95,23 @@ interface OcPart {
   text?: string;
 }
 
+function readClaudeMd(containerInput: ContainerInput): string | undefined {
+  const groupPath = '/workspace/group/CLAUDE.md';
+  const globalPath = '/workspace/global/CLAUDE.md';
+  let content = '';
+
+  if (fs.existsSync(groupPath)) {
+    content += fs.readFileSync(groupPath, 'utf-8');
+  }
+
+  if (!containerInput.isMain && fs.existsSync(globalPath)) {
+    if (content) content += '\n\n---\n\n';
+    content += fs.readFileSync(globalPath, 'utf-8');
+  }
+
+  return content || undefined;
+}
+
 function buildConfig(
   mcpServerPath: string,
   containerInput: ContainerInput,
@@ -136,13 +119,18 @@ function buildConfig(
   const provider = process.env.OPENCODE_PROVIDER || 'anthropic';
   const model = process.env.OPENCODE_MODEL;
   const smallModel = process.env.OPENCODE_SMALL_MODEL;
-  // ANTHROPIC_BASE_URL points at the credential proxy — reuse it as baseURL for all providers
   const proxyUrl = process.env.ANTHROPIC_BASE_URL;
 
-  // Strip "provider/" prefix to get the bare model ID for the provider registry
   const providerModelId = model
     ? model.replace(new RegExp(`^${provider}/`), '')
     : undefined;
+  const providerSmallModelId = smallModel
+    ? smallModel.replace(new RegExp(`^${provider}/`), '')
+    : undefined;
+
+  const modelsToRegister = [providerModelId, providerSmallModelId]
+    .filter(Boolean)
+    .filter((id, i, a) => a.indexOf(id as string) === i);
 
   const providerOptions: Record<string, unknown> =
     provider === 'anthropic'
@@ -150,22 +138,19 @@ function buildConfig(
       : {
           [provider]: {
             options: { apiKey: 'placeholder', baseURL: proxyUrl },
-            ...(providerModelId
+            ...(modelsToRegister.length > 0
               ? {
-                  models: {
-                    [providerModelId]: {
-                      id: providerModelId,
-                      name: providerModelId,
-                      tool_call: true,
-                    },
-                  },
+                  models: Object.fromEntries(
+                    modelsToRegister.map((id) => [
+                      id,
+                      { id, name: id, tool_call: true },
+                    ]),
+                  ),
                 }
               : {}),
           },
         };
 
-  // Bridge MCPs from settings.json (written by container-runner.ts on the host).
-  // Translates Claude Code format to OpenCode's McpLocalConfig / McpRemoteConfig.
   const bridgedMcps: Record<string, unknown> = {};
   const settingsPath = '/home/node/.claude/settings.json';
   try {
@@ -241,6 +226,9 @@ export class OpenCodeRunner {
     mcpServerPath: string,
     containerInput: ContainerInput,
   ): Promise<OpenCodeRunner> {
+    if (!createOpencode) {
+      createOpencode = await getCreateOpencode();
+    }
     const config = buildConfig(mcpServerPath, containerInput);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { client, server } = await (createOpencode as any)({ config });
@@ -272,16 +260,22 @@ export class OpenCodeRunner {
     }
     const id = this.sessionId;
 
+    // Re-read CLAUDE.md on every query (unlike Claude Code which does this
+    // automatically, OpenCode needs us to inject it each time).
+    const claudeMd = readClaudeMd(opts.containerInput);
+    const effectivePrompt = claudeMd
+      ? `<system>\n${claudeMd}\n</system>\n\n${prompt}`
+      : prompt;
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (this.client as any).session.promptAsync({
       path: { id },
-      body: { parts: [{ type: 'text', text: prompt }] },
+      body: { parts: [{ type: 'text', text: effectivePrompt }] },
     });
 
     let closedDuringQuery = false;
     const partTextByMessageId = new Map<string, string>();
     const roleByMessageId = new Map<string, string>();
-    let lastMessageIdThisTurn: string | undefined;
 
     const IDLE_TIMEOUT_MS = 90_000;
     let lastEventAt = Date.now();
@@ -296,8 +290,6 @@ export class OpenCodeRunner {
     }, 5000);
 
     try {
-      // Use .next() instead of for-await: for-await calls generator.return() on break,
-      // which closes the SSE stream and prevents subsequent queries from receiving events.
       while (true) {
         const { value: ev, done } = await this.stream.next();
         if (done) break;
@@ -318,7 +310,6 @@ export class OpenCodeRunner {
             | undefined;
           if (info?.id && info?.role) {
             roleByMessageId.set(info.id, info.role);
-            lastMessageIdThisTurn = info.id;
           }
         }
 
@@ -383,37 +374,151 @@ export class OpenCodeRunner {
     this.server.close();
   }
 }
+
+// Lazy import — only loaded when AGENT_RUNNER=opencode
+async function getCreateOpencode() {
+  const mod = await import('@opencode-ai/sdk');
+  return mod.createOpencode;
+}
+
+let createOpencode: typeof import('@opencode-ai/sdk').createOpencode;
+
+OpenCodeRunner.create = async function (
+  mcpServerPath: string,
+  containerInput: ContainerInput,
+): Promise<OpenCodeRunner> {
+  if (!createOpencode) {
+    createOpencode = await getCreateOpencode();
+  }
+  const config = buildConfig(mcpServerPath, containerInput);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { client, server } = await (createOpencode as any)({ config });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const eventsResult = await (client as any).event.subscribe();
+  return new OpenCodeRunner(client, server, eventsResult.stream);
+};
 ```
 
-### 2d. Update index.ts dispatch
+### 2b. Update agent-runner index.ts with dispatch
 
-In `container/agent-runner/src/index.ts`, add dispatch logic in the `main()` function:
+In `container/agent-runner/src/index.ts`:
+
+1. Add import after the Anthropic SDK import:
 
 ```typescript
-import { runAnthropicQuery } from './runners/anthropic.js';
 import { OpenCodeRunner } from './runners/opencode.js';
+```
 
-// Inside main():
+2. Add `RunnerOptions` and `RunnerResult` interfaces (inline, no separate types file):
+
+```typescript
+interface RunnerOptions {
+  prompt: string;
+  sessionId?: string;
+  containerInput: ContainerInput;
+  mcpServerPath: string;
+  sdkEnv: Record<string, string | undefined>;
+  resumeAt?: string;
+  onOutput: (output: ContainerOutput) => void;
+  shouldClose: () => boolean;
+  drainIpcInput: () => string[];
+  log: (msg: string) => void;
+}
+
+interface RunnerResult {
+  newSessionId?: string;
+  lastAssistantUuid?: string;
+  closedDuringQuery: boolean;
+}
+```
+
+3. Add `runOpenCodeLoop` function (before `runScript`):
+
+```typescript
+async function runOpenCodeLoop(
+  prompt: string,
+  sessionId: string | undefined,
+  containerInput: ContainerInput,
+  mcpServerPath: string,
+  sdkEnv: Record<string, string | undefined>,
+): Promise<void> {
+  const runner = await OpenCodeRunner.create(mcpServerPath, containerInput);
+
+  const runnerOpts: RunnerOptions = {
+    prompt,
+    sessionId,
+    containerInput,
+    mcpServerPath,
+    sdkEnv,
+    onOutput: (output) => {
+      writeOutput(output);
+    },
+    shouldClose,
+    drainIpcInput,
+    log,
+  };
+
+  try {
+    while (true) {
+      log(`Starting OpenCode query (session: ${sessionId || 'new'})...`);
+
+      const result = await runner.runQuery(runnerOpts);
+      if (result.newSessionId) {
+        sessionId = result.newSessionId;
+        runnerOpts.sessionId = sessionId;
+      }
+
+      if (result.closedDuringQuery) {
+        log('Close sentinel consumed during OpenCode query, exiting');
+        break;
+      }
+
+      writeOutput({
+        status: 'success',
+        result: null,
+        newSessionId: sessionId,
+      });
+
+      log('OpenCode query ended, waiting for next IPC message...');
+
+      const nextMessage = await waitForIpcMessage();
+      if (nextMessage === null) {
+        log('Close sentinel received, exiting');
+        break;
+      }
+
+      log(`Got new message (${nextMessage.length} chars), starting new query`);
+      runnerOpts.prompt = nextMessage;
+    }
+  } finally {
+    runner.close();
+  }
+}
+```
+
+4. In `main()`, add dispatch before the Anthropic query loop:
+
+```typescript
+// Select agent runner
 const agentRunner = process.env.AGENT_RUNNER || 'anthropic';
 
 if (agentRunner === 'opencode') {
-  await runOpenCodeLoop(prompt, sessionId, containerInput, mcpServerPath);
-} else {
-  await runAnthropicLoop(
+  await runOpenCodeLoop(
     prompt,
     sessionId,
     containerInput,
     mcpServerPath,
     sdkEnv,
   );
+  return;
 }
+
+// Anthropic/Claude Code runner (default) — existing code stays as-is
 ```
 
-The `runOpenCodeLoop` function creates an `OpenCodeRunner`, runs the first query, then waits for IPC follow-up messages in a loop (same pattern as the Anthropic loop).
+### 2c. Add SDK dependency
 
-### 2e. Add SDK dependency
-
-In `container/agent-runner/package.json`, add to dependencies:
+In `container/agent-runner/package.json`, add:
 
 ```json
 "@opencode-ai/sdk": "^1.3.7"
@@ -425,82 +530,81 @@ Then run:
 cd container/agent-runner && npm install && cd ../..
 ```
 
-### 2f. Update the Dockerfile
+### 2d. Update the Dockerfile
 
-In `container/Dockerfile`, find the global npm install line and add `opencode-ai`:
+In `container/Dockerfile`:
+
+1. Update the npm install line:
 
 ```dockerfile
 RUN npm install -g agent-browser @anthropic-ai/claude-code opencode-ai
 ```
 
-Also add XDG directory pre-creation (prevents EACCES errors when OpenCode writes session state):
+2. Add XDG directory pre-creation after workspace dirs:
 
 ```dockerfile
 RUN mkdir -p /home/node/.local/share /home/node/.local/state /home/node/.local/cache \
     && chown -R node:node /home/node/.local
 ```
 
-### 2g. Export AGENT_RUNNER from config.ts
+### 2e. Add shared AgentRunner type and per-group config
 
-In `src/config.ts`, add:
+In `src/types.ts`, add the shared type and use it in `ContainerConfig`:
+
+```typescript
+export type AgentRunner = 'anthropic' | 'opencode';
+
+export interface ContainerConfig {
+  agentRunner?: AgentRunner; // Per-group agent runner selection
+  additionalMounts?: AdditionalMount[];
+  timeout?: number;
+}
+```
+
+### 2f. Export AGENT_RUNNER from config.ts
+
+In `src/config.ts`:
+
+1. Add to the `readEnvFile` call:
+
+```typescript
+'AGENT_RUNNER',
+```
+
+2. Add export:
 
 ```typescript
 export const AGENT_RUNNER =
   process.env.AGENT_RUNNER || envConfig.AGENT_RUNNER || 'anthropic';
 ```
 
-### 2h. Extend the credential proxy
+### 2g. Update container-runner.ts
 
-In `src/credential-proxy.ts`, add a provider registry and routing logic for OpenCode:
-
-**Critical path bug fix:** change the upstream request path from:
+1. Import `AGENT_RUNNER` from config, `OneCLI` from sdk, and `readEnvFile` from env:
 
 ```typescript
-path: req.url,
+import { OneCLI } from '@onecli-sh/sdk';
+import {
+  AGENT_RUNNER,
+  CONTAINER_IMAGE,
+  // ... existing imports
+  ONECLI_URL,
+} from './config.js';
+import { readEnvFile } from './env.js';
 ```
 
-to:
+2. Instantiate OneCLI (top of file):
 
 ```typescript
-path: upstreamUrl.pathname.replace(/\/$/, '') + req.url,
+const onecli = new OneCLI({ url: ONECLI_URL });
 ```
 
-This ensures the upstream path prefix (e.g. `/api/v1` for OpenRouter) is prepended to the incoming request path. Without this fix, requests to `https://openrouter.ai/api/v1` are forwarded to `openrouter.ai/chat/completions` (missing `/api/v1`), causing 0-token responses.
-
-Also add the `PROVIDER_REGISTRY` and `resolveOcProvider()` logic that routes based on `OPENCODE_PROVIDER`. See the full implementation — it maps provider IDs to upstream URLs, auth styles (`bearer`, `x-api-key`, `goog-key`), and env var key names. The API key is always read from the host `.env` and injected by the proxy; it is never sent to the container.
-
-### 2i. Extend container-runner.ts
-
-**Pass OpenCode env vars to containers:**
-
-In `buildContainerArgs()`, add:
+3. In `buildVolumeMounts()`, add OpenCode session mount before `return mounts`:
 
 ```typescript
-const envVars = readEnvFile([
-  'AGENT_RUNNER',
-  'OPENCODE_PROVIDER',
-  'OPENCODE_MODEL',
-  'OPENCODE_SMALL_MODEL',
-]);
-if (envVars.AGENT_RUNNER)
-  args.push('-e', `AGENT_RUNNER=${envVars.AGENT_RUNNER}`);
-if (envVars.OPENCODE_PROVIDER)
-  args.push('-e', `OPENCODE_PROVIDER=${envVars.OPENCODE_PROVIDER}`);
-if (envVars.OPENCODE_MODEL)
-  args.push('-e', `OPENCODE_MODEL=${envVars.OPENCODE_MODEL}`);
-if (envVars.OPENCODE_SMALL_MODEL)
-  args.push('-e', `OPENCODE_SMALL_MODEL=${envVars.OPENCODE_SMALL_MODEL}`);
-if (envVars.AGENT_RUNNER === 'opencode') {
-  args.push('-e', 'XDG_DATA_HOME=/home/node/.local/share');
-}
-```
-
-**Add OpenCode session persistence mount:**
-
-In `buildVolumeMounts()`, add a per-group volume for OpenCode session data:
-
-```typescript
-if (envVars.AGENT_RUNNER === 'opencode') {
+// OpenCode session persistence mount (per-group)
+const effectiveRunner = group.containerConfig?.agentRunner || AGENT_RUNNER;
+if (effectiveRunner === 'opencode') {
   const groupOpencodeDir = path.join(
     DATA_DIR,
     'sessions',
@@ -508,7 +612,6 @@ if (envVars.AGENT_RUNNER === 'opencode') {
     'opencode',
   );
   fs.mkdirSync(groupOpencodeDir, { recursive: true });
-  // ensure node user can write
   try {
     fs.chownSync(groupOpencodeDir, 1000, 1000);
   } catch {
@@ -522,65 +625,96 @@ if (envVars.AGENT_RUNNER === 'opencode') {
 }
 ```
 
-**Bridge MCPs from `~/.claude.json`:**
-
-After building `mcpServers` from `~/.claude/.credentials.json`, also read local stdio MCPs from `~/.claude.json`:
+4. Make `buildContainerArgs` async and use `onecli.applyContainerConfig` for credential injection (replaces the native credential proxy):
 
 ```typescript
-const claudeJsonPath = path.join(os.homedir(), '.claude.json');
-if (fs.existsSync(claudeJsonPath)) {
-  try {
-    const claudeJson = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8'));
-    const projectMcps = claudeJson.projects?.[process.cwd()]?.mcpServers ?? {};
-    for (const [name, cfg] of Object.entries(projectMcps) as Array<
-      [string, Record<string, unknown>]
-    >) {
-      if (cfg.command) {
-        mcpServers[name] = cfg; // pass through Claude Code format; opencode.ts translates at runtime
-      }
-    }
-  } catch {
-    /* ignore */
+async function buildContainerArgs(
+  group: RegisteredGroup,
+  mounts: VolumeMount[],
+  containerName: string,
+  agentIdentifier?: string,
+): Promise<string[]> {
+  const args: string[] = ['run', '-i', '--rm', '--name', containerName];
+
+  args.push('-e', `TZ=${TIMEZONE}`);
+
+  // OneCLI gateway handles credential injection — containers never see real secrets.
+  const onecliApplied = await onecli.applyContainerConfig(args, {
+    addHostMapping: false,
+    agent: agentIdentifier,
+  });
+  if (onecliApplied) {
+    logger.info({ containerName }, 'OneCLI gateway config applied');
+  } else {
+    logger.warn({ containerName }, 'OneCLI gateway not reachable — container will have no credentials');
   }
-}
+
+  // Pass agent runner selection (per-group override or global default)
+  const effectiveRunner = group.containerConfig?.agentRunner || AGENT_RUNNER;
+  args.push('-e', `AGENT_RUNNER=${effectiveRunner}`);
+
+  // Pass OpenCode provider/model env vars when using opencode runner
+  if (effectiveRunner === 'opencode') {
+    const envVars = readEnvFile(['OPENCODE_PROVIDER', 'OPENCODE_MODEL', 'OPENCODE_SMALL_MODEL']);
+    if (envVars.OPENCODE_PROVIDER)
+      args.push('-e', `OPENCODE_PROVIDER=${envVars.OPENCODE_PROVIDER}`);
+    if (envVars.OPENCODE_MODEL)
+      args.push('-e', `OPENCODE_MODEL=${envVars.OPENCODE_MODEL}`);
+    if (envVars.OPENCODE_SMALL_MODEL)
+      args.push('-e', `OPENCODE_SMALL_MODEL=${envVars.OPENCODE_SMALL_MODEL}`);
+    args.push('-e', 'XDG_DATA_HOME=/home/node/.local/share');
+    // Exclude localhost from OneCLI proxy — OpenCode runs its own local
+    // server at 127.0.0.1:4096 that the SDK must reach directly.
+    args.push('-e', 'NO_PROXY=127.0.0.1,localhost');
+    args.push('-e', 'no_proxy=127.0.0.1,localhost');
+  }
 ```
 
-This automatically makes any MCP added via `claude mcp add` available to OpenCode without extra config.
-
-### 2j. Add runner-switching guard to index.ts
-
-In the function that calls the container agent, add a guard that discards session IDs belonging to the wrong runner:
+5. Update the call site in `runContainerAgent()`:
 
 ```typescript
-import { AGENT_RUNNER } from './config.js';
+const agentIdentifier = input.isMain
+  ? undefined
+  : group.folder.toLowerCase().replace(/_/g, '-');
+const containerArgs = await buildContainerArgs(
+  group,
+  mounts,
+  containerName,
+  agentIdentifier,
+);
+```
 
-// When reading the stored session ID for a group:
+### 2h. Add session ID guard to index.ts
+
+In `src/index.ts`:
+
+1. Import `AGENT_RUNNER`:
+
+```typescript
+import {
+  AGENT_RUNNER,
+  ASSISTANT_NAME,
+  // ... existing imports
+} from './config.js';
+```
+
+2. In `runAgent()`, replace `const sessionId = sessions[group.folder];` with:
+
+```typescript
+// Cross-runner session guard: discard session IDs belonging to the wrong runner.
+const effectiveRunner = group.containerConfig?.agentRunner || AGENT_RUNNER;
 const rawSessionId = sessions[group.folder];
 const isOpencodeSession = rawSessionId?.startsWith('ses_');
 const sessionId =
-  (AGENT_RUNNER === 'opencode') === isOpencodeSession
+  (effectiveRunner === 'opencode') === isOpencodeSession
     ? rawSessionId
     : undefined;
-```
-
-OpenCode session IDs start with `ses_`; Anthropic/Claude Code session IDs are UUIDs. This makes switching `AGENT_RUNNER` in `.env` + restarting seamless — no manual DB cleanup needed.
-
-### 2k. Document new variables in .env
-
-Add to `.env` (and `.env.example` if it exists):
-
-```bash
-# OpenCode runner — set AGENT_RUNNER=opencode to switch from Anthropic SDK
-# AGENT_RUNNER=opencode
-# OPENCODE_PROVIDER=openrouter           # any provider ID (anthropic, openai, openrouter, google, …)
-# OPENCODE_MODEL=openrouter/qwen/qwen3.5-flash-02-23   # format: provider/model-id
-# OPENCODE_SMALL_MODEL=openrouter/qwen/qwen3.5-flash-02-23  # optional — defaults to provider default
-# OPENROUTER_API_KEY=sk-or-v1-...        # injected by credential proxy — never sent to container
-#
-# For providers not in the built-in registry (no code change needed):
-# OPENCODE_PROVIDER_UPSTREAM_URL=https://api.custom.com/v1
-# OPENCODE_PROVIDER_AUTH_STYLE=bearer    # bearer | x-api-key | goog-key (default: bearer)
-# OPENCODE_PROVIDER_API_KEY_ENV=CUSTOM_API_KEY
+if (rawSessionId && !sessionId) {
+  logger.info(
+    { group: group.name, staleSession: rawSessionId, runner: effectiveRunner },
+    'Discarded stale session ID from different runner',
+  );
+}
 ```
 
 ## Phase 3: Build and Verify
@@ -599,48 +733,82 @@ Fix any TypeScript errors before proceeding.
 ./container/build.sh
 ```
 
-This compiles the container TypeScript (including the new runners) and bakes `opencode-ai` into the image.
-
-### Verify the build
+If the build cache is stale, prune first:
 
 ```bash
-echo '{"prompt":"say hello in one word","groupFolder":"test","chatJid":"test@g.us","isMain":false}' \
-  | docker run -i nanoclaw-agent:latest 2>&1 | grep -E "NANOCLAW_OUTPUT|error"
+docker buildx prune -f
+./container/build.sh
 ```
-
-This runs in Anthropic mode (default). Should return `{"status":"success","result":"..."}`.
 
 ## Phase 4: Configuration
 
-### Activate OpenCode runner
+### Global switch (all groups)
 
-Edit `.env` to uncomment and set:
+Edit `.env`:
 
 ```bash
 AGENT_RUNNER=opencode
-OPENCODE_PROVIDER=openrouter       # or: anthropic, openai, google, deepseek, groq, …
+OPENCODE_PROVIDER=openrouter
 OPENCODE_MODEL=openrouter/qwen/qwen3.5-flash-02-23
 OPENCODE_SMALL_MODEL=openrouter/qwen/qwen3.5-flash-02-23
-OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
-Ask the user which provider they want. Supported providers out of the box (key env vars in parentheses):
+### Per-group switch
 
-| Provider         | `OPENCODE_PROVIDER` | API Key Env Var                |
-| ---------------- | ------------------- | ------------------------------ |
-| Anthropic        | `anthropic`         | `ANTHROPIC_API_KEY`            |
-| OpenRouter       | `openrouter`        | `OPENROUTER_API_KEY`           |
-| OpenAI           | `openai`            | `OPENAI_API_KEY`               |
-| Google Gemini    | `google`            | `GOOGLE_GENERATIVE_AI_API_KEY` |
-| DeepSeek         | `deepseek`          | `DEEPSEEK_API_KEY`             |
-| Groq             | `groq`              | `GROQ_API_KEY`                 |
-| Mistral          | `mistral`           | `MISTRAL_API_KEY`              |
-| xAI Grok         | `xai`               | `XAI_API_KEY`                  |
-| Together AI      | `together`          | `TOGETHER_API_KEY`             |
-| Fireworks        | `fireworks`         | `FIREWORKS_API_KEY`            |
-| Cohere           | `cohere`            | `COHERE_API_KEY`               |
-| Moonshot (Kimi)  | `moonshot`          | `MOONSHOT_API_KEY`             |
-| **OpenCode Zen** | `opencode`          | `OPENCODE_ZEN_API_KEY`         |
+Set `agentRunner` in the group's `container_config` JSON in the database:
+
+```sql
+UPDATE registered_groups
+SET container_config = json_set(
+  COALESCE(container_config, '{}'),
+  '$.agentRunner',
+  'opencode'
+)
+WHERE folder = 'telegram_main';
+```
+
+When a group has `agentRunner` set in its config, it overrides the global `AGENT_RUNNER` from `.env`. This lets you run some groups on OpenCode and others on Anthropic simultaneously.
+
+### Supported providers
+
+| Provider         | `OPENCODE_PROVIDER` | API Key Env Var                | OneCLI host pattern                 |
+| ---------------- | ------------------- | ------------------------------ | ----------------------------------- |
+| Anthropic        | `anthropic`         | `ANTHROPIC_API_KEY`            | `api.anthropic.com`                 |
+| OpenRouter       | `openrouter`        | `OPENROUTER_API_KEY`           | `openrouter.ai`                     |
+| OpenAI           | `openai`            | `OPENAI_API_KEY`               | `api.openai.com`                    |
+| Google Gemini    | `google`            | `GOOGLE_GENERATIVE_AI_API_KEY` | `generativelanguage.googleapis.com` |
+| DeepSeek         | `deepseek`          | `DEEPSEEK_API_KEY`             | `api.deepseek.com`                  |
+| Groq             | `groq`              | `GROQ_API_KEY`                 | `api.groq.com`                      |
+| Mistral          | `mistral`           | `MISTRAL_API_KEY`              | `api.mistral.ai`                    |
+| xAI Grok         | `xai`               | `XAI_API_KEY`                  | `api.x.ai`                          |
+| Together AI      | `together`          | `TOGETHER_API_KEY`             | `api.together.xyz`                  |
+| Fireworks        | `fireworks`         | `FIREWORKS_API_KEY`            | `api.fireworks.ai`                  |
+| Cohere           | `cohere`            | `COHERE_API_KEY`               | `api.cohere.ai`                     |
+| Moonshot (Kimi)  | `moonshot`          | `MOONSHOT_API_KEY`             | `api.moonshot.cn`                   |
+| **OpenCode Zen** | `opencode`          | `OPENCODE_ZEN_API_KEY`         | `opencode.ai`                       |
+
+### Register provider keys in OneCLI
+
+OneCLI is a host-pattern MITM proxy — you must register each provider's API key with its hostname so the gateway can inject it:
+
+```bash
+# Example: register OpenRouter
+onecli secrets create --name OpenRouter --type generic \
+  --value sk-or-v1-... --host-pattern openrouter.ai \
+  --header-name "Authorization" --value-format "Bearer {value}"
+
+# Example: register Google
+onecli secrets create --name Google --type generic \
+  --value your-key --host-pattern generativelanguage.googleapis.com \
+  --header-name "x-goog-api-key" --value-format "{value}"
+
+# Example: register OpenCode Zen
+onecli secrets create --name "OpenCode Zen" --type generic \
+  --value your-zen-key --host-pattern opencode.ai \
+  --header-name "Authorization" --value-format "Bearer {value}"
+```
+
+Without this step, OneCLI forwards the request unchanged (with the placeholder key) and the provider returns an auth error.
 
 ### OpenCode Zen
 
@@ -655,10 +823,16 @@ OpenCode Zen is a curated model gateway by the OpenCode team. Models are tested 
    OPENCODE_PROVIDER=opencode
    OPENCODE_MODEL=opencode/qwen3.6-plus-free
    OPENCODE_SMALL_MODEL=opencode/qwen3.6-plus-free
-   OPENCODE_ZEN_API_KEY=your-zen-api-key
+   ```
+4. Register the key in OneCLI:
+   ```bash
+   onecli secrets create --name "OpenCode Zen" --type generic \
+     --value your-zen-key --host-pattern opencode.ai \
+     --header-name "Authorization" --value-format "Bearer {value}"
    ```
 
 **Free models:**
+
 | Model ID | Description |
 |----------|-------------|
 | `qwen3.6-plus-free` | Qwen 3.6 Plus — capable general-purpose model |
@@ -668,32 +842,14 @@ OpenCode Zen is a curated model gateway by the OpenCode team. Models are tested 
 | `mimo-v2-omni-free` | MiMo V2 Omni |
 | `big-pickle` | Stealth model (identity unknown) |
 
-**Paid models** (per-request pricing, auto-reload at $5 balance):
+**Paid models** (per-request pricing):
 
 - Claude: `claude-sonnet-4-5`, `claude-sonnet-4-6`, `claude-opus-4-5`, `claude-opus-4-6`, `claude-haiku-4-5`
-- GPT: `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.3-codex`, `gpt-5.2`, `gpt-5.2-codex`
+- GPT: `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.3-codex`
 - Gemini: `gemini-3.1-pro`, `gemini-3-flash`
 - Other: `kimi-k2.5`, `glm-5`, `minimax-m2.5`
 
 Full list and pricing: https://opencode.ai/docs/zen/
-
-**Endpoint routing:** Zen uses different endpoints per model type:
-
-- OpenAI-compatible (`qwen`, `kimi`, `glm`, `minimax`): `/v1/chat/completions`
-- Anthropic (`claude-*`): `/v1/messages`
-- OpenAI (`gpt-*`): `/v1/responses`
-- Google (`gemini-*`): `/v1/models/{model}`
-
-The credential proxy forwards all paths correctly since it prepends the upstream base URL to the request path.
-
-For any unlisted provider, use the escape hatch:
-
-```bash
-OPENCODE_PROVIDER_UPSTREAM_URL=https://api.custom.com/v1
-OPENCODE_PROVIDER_AUTH_STYLE=bearer
-OPENCODE_PROVIDER_API_KEY_ENV=CUSTOM_API_KEY
-CUSTOM_API_KEY=your-key-here
-```
 
 **Model format:** always `provider/model-id`. Examples:
 
@@ -701,6 +857,7 @@ CUSTOM_API_KEY=your-key-here
 - `openrouter/anthropic/claude-haiku-4.5`
 - `openai/gpt-4o-mini`
 - `google/gemini-2.0-flash`
+- `opencode/qwen3.6-plus-free`
 
 ### Restart NanoClaw
 
@@ -709,261 +866,101 @@ CUSTOM_API_KEY=your-key-here
 launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 
 # Linux (systemd)
-systemctl --user restart nanoclaw
-
-# Direct
-pkill -f "dist/index.js" && node dist/index.js &
+systemctl restart nanoclaw
 ```
 
 ## Phase 5: Verify
 
-Send a message to your registered group and check for a response. Then verify OpenRouter (or your provider) logs show a request.
+Send a message to your registered group and check for a response.
 
-Check container logs if something goes wrong:
+Check container logs:
 
 ```bash
 docker logs $(docker ps --format '{{.Names}}' | grep nanoclaw | head -1)
 ```
 
-Key log lines to look for:
+Key log lines:
 
-- `[agent-runner] Initializing OpenCode runner...` — runner selected correctly
+- `[agent-runner] Starting OpenCode query` — runner selected correctly
 - `[agent-runner] OpenCode session created: ses_...` — session started
 - `[agent-runner] OpenCode session idle` — response received
 - `[agent-runner] OpenCode query done. result_len=N` — N > 0 means success
 
-If `result_len=0`: check that the credential proxy is in OpenCode mode (look for `Credential proxy: OpenCode provider mode` in the nanoclaw log) and verify your API key is set correctly.
-
 ## Switching Back to Anthropic
 
-Comment out the OpenCode variables in `.env`:
+Set `AGENT_RUNNER=anthropic` in `.env` (or per-group via `container_config`). Restart NanoClaw. The session guard automatically discards any stored `ses_...` session IDs.
 
-```bash
-# AGENT_RUNNER=opencode
-# OPENCODE_PROVIDER=...
-# etc.
-```
+## Architecture Notes
 
-Restart NanoClaw. The runner-switching guard automatically discards any stored `ses_...` session IDs, so the Anthropic runner starts fresh with no manual DB cleanup needed.
+**Security**: Credentials are injected by OneCLI gateway — containers never see real API keys. The OpenCode runner sends requests to `ANTHROPIC_BASE_URL` (set by OneCLI's `applyContainerConfig`) with a placeholder key, which OneCLI intercepts and replaces with the real key from the vault.
+
+**Sessions**: OpenCode sessions persist on disk at `data/sessions/<group>/opencode/` (mounted into the container). Per-group isolation.
+
+**MCPs**: Any MCP added via `claude mcp add` is automatically bridged to OpenCode.
+
+**CLAUDE.md**: The runner reads `/workspace/group/CLAUDE.md` (and `/workspace/global/CLAUDE.md` for non-main groups) and prepends it to **every** prompt inside `<system>` tags. OpenCode doesn't read CLAUDE.md from the filesystem automatically, so the runner injects it manually on each turn.
+
+**Per-group runner selection**: The `agentRunner` field in `containerConfig` overrides the global `AGENT_RUNNER`. This is stored in the `container_config` JSON column in the database — no schema migration needed.
 
 ## Known Gotchas
 
-These are real issues hit during development. Read before debugging.
+### 1. SSE stream closes on `for-await break` — use `.next()` instead
 
-### 1. Credential proxy path bug (already fixed in 2h — don't regress)
+`for await (const ev of this.stream) { ... break; }` calls `generator.return()` on break, which closes the underlying SSE HTTP connection. The second call to `runQuery()` then iterates a closed generator and exits immediately with no events. **Symptom**: first message works, all follow-up messages produce `result_len=0` with no `[ev]` log lines. **Fix**: use `while (true) { const { value, done } = await this.stream.next(); ... }`.
 
-The proxy's `path: req.url` only forwards the request path, discarding the upstream URL's pathname. When `upstreamUrl = https://openrouter.ai/api/v1`, the proxy would forward to `openrouter.ai/chat/completions` instead of `openrouter.ai/api/v1/chat/completions`. OpenRouter returns its website HTML for `/chat/completions`, which OpenCode parses as 0 tokens. **Symptom**: `result_len=0` with no API errors, 0 tokens in the provider's usage dashboard.
+### 2. `message.part.updated` fires before `message.updated`
 
-### 2. SSE stream closes on `for-await break` — use `.next()` instead
+Streaming text parts arrive _before_ the message's role is set. If you filter `part.updated` events by role eagerly, you miss all text and get empty results. **Fix**: buffer all text parts keyed by `messageID`, then resolve roles from `message.updated` events at `session.idle`.
 
-`for await (const ev of this.stream) { ... break; }` calls `generator.return()` on break, which closes the underlying SSE HTTP connection. The second call to `runQuery()` then iterates a closed generator and exits immediately with no events. **Symptom**: first message works, all follow-up messages produce `result_len=0` with no `[ev]` log lines.
+### 3. Stale session IDs break the opposite runner
 
-### 3. `message.part.updated` fires before `message.updated`
+OpenCode session IDs start with `ses_`; Anthropic/Claude Code IDs are UUIDs. The session guard in `src/index.ts` handles this automatically.
 
-Streaming text parts arrive _before_ the message's role (`assistant` / `user`) is set. If you filter `part.updated` events by role eagerly, you miss all text and get empty results. **Fix**: buffer all text parts keyed by `messageID`, then resolve roles from `message.updated` events, and collect the final text only at `session.idle`.
+### 4. `newSessionId` must NOT be emitted on session errors
 
-### 4. Stale session IDs break the opposite runner
+If `session.error` triggers `onOutput({ ..., newSessionId })`, NanoClaw stores the broken session ID and tries to resume it on the next container start, causing an infinite error loop. Always omit `newSessionId` from error outputs.
 
-OpenCode session IDs start with `ses_`; Anthropic/Claude Code IDs are UUIDs. If you switch `AGENT_RUNNER` without the guard in 2j, NanoClaw passes an `ses_...` ID to the Anthropic runner (or vice versa), which fails immediately and retries indefinitely. **Symptom**: rapid retry loop, no `Agent output` log lines, containers exit in under a second.
+### 5. XDG_DATA_HOME must be set explicitly
 
-### 5. Docker build cache retains stale COPY layers
+Without `XDG_DATA_HOME=/home/node/.local/share`, OpenCode writes session state to its default location which may not be the mounted volume.
 
-`docker build --no-cache` alone does NOT invalidate `COPY` steps when using BuildKit — the builder volume retains old layer content. **Symptom**: your code changes don't appear inside the container even after a rebuild. **Fix**: prune the builder first:
+### 6. `OPENCODE_SMALL_MODEL` defaults to a different model
+
+If unset, OpenCode picks its own default small model for title generation. This causes a second unexpected API call. Set `OPENCODE_SMALL_MODEL` to the same model as `OPENCODE_MODEL`.
+
+### 7. `message.updated` role resolution
+
+The `roleByMessageId` map must be populated from `message.updated` events, not from `message.part.updated` events. The part events arrive first but don't have role info.
+
+### 8. Models not in OpenCode's registry need explicit registration
+
+If the model isn't in OpenCode's built-in database, `createOpencode()` will fail. Register it under the `provider` config key with `{ id, name, tool_call: true }`.
+
+### 9. NO_PROXY must exclude localhost when using OneCLI
+
+OneCLI is a transparent MITM proxy that intercepts ALL outbound HTTPS from the container. OpenCode runs its own local server at `127.0.0.1:4096` that the SDK communicates with. Without `NO_PROXY=127.0.0.1,localhost`, the proxy intercepts these local requests and closes the connection, causing `ECONNRESET` / "other side closed" crashes. The skill adds this env var automatically in `container-runner.ts`.
+
+### 10. CLAUDE.md is re-read on every prompt
+
+Unlike Claude Code's SDK which re-reads `CLAUDE.md` automatically each turn, OpenCode has no such mechanism. The runner reads the file and prepends it inside `<system>` tags on **every** `runQuery()` call, so changes to `CLAUDE.md` take effect on the next message without a session reset.
+
+### 11. Inline `.env` comments get included in values
+
+`.env` files do NOT support inline comments. `KEY=value  # comment` sets the value to `value  # comment`. Always put comments on their own line above the key.
+
+### 12. Docker build cache retains stale COPY layers
+
+`docker build --no-cache` alone does NOT invalidate `COPY` steps when using BuildKit — the builder volume retains old layer content. **Fix**: prune the builder first:
 
 ```bash
 docker buildx prune -f
 ./container/build.sh
 ```
 
-### 6. `agent-runner-src` host mount overrides container `/app/src`
+### 13. Model version numbers use dots, not hyphens
 
-NanoClaw mounts the host's runner source into containers at `/app/src`. After editing runner files, the running container still uses the cached host copy. **Fix**: sync changed files to the group's host mount directory AND touch `index.ts` to invalidate the cache check:
-
-```bash
-cp container/agent-runner/src/runners/opencode.ts \
-   data/sessions/<group>/agent-runner-src/runners/opencode.ts
-touch container/agent-runner/src/index.ts
-```
-
-Then restart NanoClaw. The next container spawn will sync the updated source.
-
-### 7. XDG_DATA_HOME must be set explicitly
-
-Without `XDG_DATA_HOME=/home/node/.local/share`, OpenCode writes session state to its default location which may not be the mounted volume. Set it explicitly in the container environment (handled in 2i).
-
-### 8. `OPENCODE_SMALL_MODEL` defaults to a different model
-
-If unset, OpenCode picks its own default small model for title generation (e.g. `anthropic/claude-haiku-4.5` when using OpenRouter). This causes a second unexpected API call. Set `OPENCODE_SMALL_MODEL` to the same model as `OPENCODE_MODEL` to keep everything on one model.
-
-### 9. `newSessionId` must NOT be emitted on session errors
-
-If `session.error` triggers `onOutput({ ..., newSessionId })`, NanoClaw stores the broken session ID and tries to resume it on the next container start, causing an infinite error loop. Always omit `newSessionId` from error outputs.
-
-### 10. `opencode serve` lingers on port 4096 after crashes
-
-When the OpenCode server crashes or the container exits uncleanly, the `opencode` binary can keep listening on port 4096. On the next container start, `createOpencode()` tries to bind the same port and fails immediately. **Symptom**: container starts then dies in under a second with `EADDRINUSE` or similar port-conflict errors. **Fix** (before retesting manually on the host):
-
-```bash
-pkill -9 -f opencode
-```
-
-Inside the container this resolves automatically because each container run has an isolated network namespace. This issue only affects direct host-side testing (e.g. `docker run -i`).
-
-### 11. SSE events have no `.payload` wrapper — TypeScript types lie
-
-`client.event.subscribe()` returns `{ stream: AsyncGenerator<OcEvent> }`. Each `ev` is `{ type, properties }` directly. The TypeScript type definitions suggest a `.payload` field but it does not exist at runtime. Accessing `ev.payload.*` silently returns `undefined`. Always use `ev.properties.*` for event data.
-
-### 12. Model version numbers use dots, not hyphens
-
-OpenCode model IDs use dots in version suffixes: `openrouter/qwen/qwen3.5-flash-02-23`, not `openrouter/qwen/qwen3-flash-02-23`. Getting this wrong causes `Model not found` errors without a clear hint. Always check the provider's model list for the exact ID.
-
-### 13. Models not in OpenCode's registry need explicit registration in config
-
-If the model isn't in OpenCode's built-in `models.dev` database, `createOpencode()` will fail with a model-not-found error. Register it under the `provider` config key:
-
-```typescript
-provider: {
-  [providerId]: {
-    models: {
-      [modelId]: { id: modelId, name: 'Display Name', tool_call: true },
-    },
-  },
-},
-```
+OpenCode model IDs use dots in version suffixes: `openrouter/qwen/qwen3.5-flash-02-23`. Getting this wrong causes `Model not found` errors. Always check the provider's model list for the exact ID.
 
 ### 14. Never set `OPENCODE_CONFIG_CONTENT` directly
 
 The OpenCode SDK uses `OPENCODE_CONFIG_CONTENT` internally to pass the JSON config blob to the spawned `opencode serve` process. Setting this env var yourself will be overwritten or cause conflicts. Always inject config via `createOpencode({ config: ... })`.
-
-### 15. OpenCode does NOT read `CLAUDE.md` automatically — inject it into the first prompt
-
-Claude Code's SDK reads `CLAUDE.md` from `cwd` automatically. OpenCode has no such mechanism — it ignores the filesystem entirely for system instructions. The fix: read `/workspace/group/CLAUDE.md` (and `/workspace/global/CLAUDE.md` for non-main groups) at the start of the first `runQuery()` call and prepend the content to the prompt inside `<system>` tags:
-
-```typescript
-if (!this.claudeMdInjected) {
-  const claudeMd = readClaudeMd(opts.containerInput);
-  if (claudeMd) {
-    effectivePrompt = `<system>\n${claudeMd}\n</system>\n\n${prompt}`;
-  }
-  this.claudeMdInjected = true;
-}
-```
-
-Only inject on the first query — subsequent turns in the same session already have it in history. **Symptom if missing**: agent ignores its name, role, formatting rules, and any group-specific instructions. It may respond as a generic assistant or identify itself as a different model.
-
-### 16. Register both main and small models, not just the main model
-
-`buildConfig()` originally only registered the main model. When `OPENCODE_SMALL_MODEL` differs from `OPENCODE_MODEL`, OpenCode tries to use the small model for title generation and fails with `Model not found`. Register all unique model IDs:
-
-```typescript
-const modelsToRegister = [providerModelId, providerSmallModelId]
-  .filter(Boolean)
-  .filter((id, i, a) => a.indexOf(id) === i); // deduplicate
-
-models: Object.fromEntries(
-  modelsToRegister.map((id) => [id, { id, name: id, tool_call: true }]),
-),
-```
-
-### 17. Inline `.env` comments get included in env var values
-
-`.env` files do NOT support inline comments. `KEY=value  # comment` sets the value to `value  # comment` — the comment becomes part of the string. OpenCode then tries to find a model named `openrouter/qwen/qwen3.5-flash-02-23   # format: provider/model-id`. **Symptom**: `Model not found: openrouter/qwen/qwen3.5-flash-02-23   # format:...` with the comment text in the error. Always put comments on their own line above the key.
-
-### 18. OpenRouter shows "Unknown" app unless you set identifying headers
-
-OpenRouter uses `X-Title` and `HTTP-Referer` request headers to label traffic in its dashboard. Without them, every request shows as "Unknown". Add these in the credential proxy when `OPENCODE_PROVIDER=openrouter`:
-
-```typescript
-if (secrets.OPENCODE_PROVIDER === 'openrouter') {
-  headers['x-title'] = 'NanoClaw';
-  headers['http-referer'] = 'https://github.com/qwibitai/nanoclaw';
-}
-```
-
----
-
-## Adding a New Provider
-
-The credential proxy has a built-in `PROVIDER_REGISTRY` in `src/credential-proxy.ts`. Adding a new provider requires **two steps** — no code changes to the runner or container are needed.
-
-### Step 1: Add to PROVIDER_REGISTRY
-
-In `src/credential-proxy.ts`, add an entry to the `PROVIDER_REGISTRY` object:
-
-```typescript
-myprovider: {
-  upstream: 'https://api.myprovider.com/v1',
-  auth: 'bearer',           // 'bearer' | 'x-api-key' | 'goog-key'
-  envKey: 'MYPROVIDER_API_KEY',
-},
-```
-
-| Field      | Description                                                                                                                                                            |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `upstream` | The base URL of the provider's API. The proxy prepends this to the incoming request path. For OpenAI-compatible APIs, this is typically `https://api.provider.com/v1`. |
-| `auth`     | How the API key should be sent. `bearer` → `Authorization: Bearer <key>`, `x-api-key` → `x-api-key: <key>`, `goog-key` → `x-goog-api-key: <key>`.                      |
-| `envKey`   | The name of the env var in `.env` that holds the real API key.                                                                                                         |
-
-### Step 2: Add to .env
-
-```bash
-OPENCODE_PROVIDER=myprovider
-OPENCODE_MODEL=myprovider/model-name
-OPENCODE_SMALL_MODEL=myprovider/model-name
-MYPROVIDER_API_KEY=your-key-here
-```
-
-### Step 3: Rebuild and restart
-
-```bash
-npm run build
-systemctl restart nanoclaw
-```
-
-### Unlisted providers (escape hatch — no code change needed)
-
-For providers you don't want to add to the registry, use the escape hatch in `.env`:
-
-```bash
-OPENCODE_PROVIDER=custom
-OPENCODE_MODEL=custom/some-model
-OPENCODE_PROVIDER_UPSTREAM_URL=https://api.custom.com/v1
-OPENCODE_PROVIDER_AUTH_STYLE=bearer
-OPENCODE_PROVIDER_API_KEY_ENV=CUSTOM_API_KEY
-CUSTOM_API_KEY=your-key-here
-```
-
-### How it works
-
-1. The OpenCode runner sends all API requests to `ANTHROPIC_BASE_URL` (the credential proxy) with a placeholder key
-2. The proxy looks up the provider in `PROVIDER_REGISTRY` (or uses escape-hatch env vars)
-3. It strips the placeholder auth, injects the real key from `.env`, and forwards to the actual upstream
-4. The container never sees real credentials
-
-### Provider endpoint compatibility
-
-Most LLM providers offer an **OpenAI-compatible** endpoint at `/v1/chat/completions`. These work out of the box with `auth: 'bearer'`:
-
-- OpenRouter, OpenAI, DeepSeek, Groq, Mistral, xAI, Together, Fireworks, Cohere, Perplexity, Cerebras, SambaNova, Moonshot
-
-Providers with **different auth styles**:
-
-- Anthropic: `x-api-key` header at `https://api.anthropic.com`
-- Google AI Studio: `goog-key` (`x-goog-api-key`) — but note Google's native API is NOT OpenAI-compatible; use the `/v1beta/openai` endpoint with `bearer` auth instead
-- OpenCode Zen: `bearer` auth at `https://opencode.ai/zen` (routes to different sub-endpoints per model type)
-
----
-
-## Architecture Notes
-
-**Security**: API keys never enter the container. The container always sends requests to the credential proxy at `ANTHROPIC_BASE_URL` (the host's docker bridge IP). The proxy injects the real key and forwards to the actual LLM API.
-
-**Sessions**: OpenCode sessions persist on disk at `data/sessions/<group>/opencode/` (mounted into the container). This gives the agent per-group memory across container restarts, identical to how Anthropic sessions work.
-
-**MCPs**: Any MCP added via `claude mcp add` in the nanoclaw project directory is automatically bridged to OpenCode. Local stdio MCPs (`command`/`args`/`env` format) are translated to OpenCode's `McpLocalConfig`; HTTP MCPs are translated to `McpRemoteConfig`. No extra config needed.
-
-**Skills**: NanoClaw syncs all skills from `container/skills/` into each group's session directory at `data/sessions/<group>/skills/`. This directory is mounted into the container at `/home/node/.claude/skills/`. OpenCode discovers these skills automatically via its `.claude/skills/*/SKILL.md` discovery path. Skills are available to the agent through the native `skill` tool — no extra config needed. To add a new skill, create a folder under `container/skills/<name>/SKILL.md` and it will be synced to all groups on next container spawn.
-
-**CLAUDE.md**: Each group has its own `CLAUDE.md` at `groups/<group>/CLAUDE.md` (e.g. `groups/telegram_main/CLAUDE.md`). This is mounted into the container at `/workspace/group/CLAUDE.md`. The OpenCode runner reads this file at the start of the first query and prepends it to the prompt inside `<system>` tags. Non-main groups also get the global `groups/global/CLAUDE.md` appended. This gives each group its own identity, formatting rules, and behavioral instructions.
-
-**SSE stream**: The event stream is created once per container lifecycle and reused across all IPC follow-up messages. Manual `.next()` iteration (not `for-await`) is used to prevent the stream from closing between queries.
