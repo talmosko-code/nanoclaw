@@ -345,26 +345,12 @@ async function runAgent(
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
 
-  // Cross-runner session guard: discard session IDs belonging to the wrong runner.
-  // OpenCode session IDs start with 'ses_'; Anthropic/Claude Code IDs are UUIDs.
-  // This makes switching AGENT_RUNNER seamless — no manual DB cleanup needed.
-  const effectiveRunner = group.containerConfig?.agentRunner || AGENT_RUNNER;
-  const rawSessionId = sessions[group.folder];
-  const isOpencodeSession = rawSessionId?.startsWith('ses_');
-  const sessionId =
-    (effectiveRunner === 'opencode') === isOpencodeSession
-      ? rawSessionId
-      : undefined;
-  if (rawSessionId && !sessionId) {
-    logger.info(
-      {
-        group: group.name,
-        staleSession: rawSessionId,
-        runner: effectiveRunner,
-      },
-      'Discarded stale session ID from different runner',
-    );
-  }
+  // Each runner recognises only its own session ID format (OpenCode: 'ses_...',
+  // Anthropic: UUID). If the stored ID belongs to the other runner the container
+  // will report a stale-session error, which the recovery below (lines ~431-444)
+  // detects and clears before retrying fresh. Storing sessions per-runner so
+  // switching back doesn't lose the original session is a future improvement.
+  const sessionId = sessions[group.folder];
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();

@@ -24,44 +24,13 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
-import { OpenCodeRunner } from './runners/opencode.js';
-
-interface RunnerOptions {
-  prompt: string;
-  sessionId?: string;
-  containerInput: ContainerInput;
-  mcpServerPath: string;
-  sdkEnv: Record<string, string | undefined>;
-  resumeAt?: string;
-  onOutput: (output: ContainerOutput) => void;
-  shouldClose: () => boolean;
-  drainIpcInput: () => string[];
-  log: (msg: string) => void;
-}
-
-interface RunnerResult {
-  newSessionId?: string;
-  lastAssistantUuid?: string;
-  closedDuringQuery: boolean;
-}
-
-interface ContainerInput {
-  prompt: string;
-  sessionId?: string;
-  groupFolder: string;
-  chatJid: string;
-  isMain: boolean;
-  isScheduledTask?: boolean;
-  assistantName?: string;
-  script?: string;
-}
-
-interface ContainerOutput {
-  status: 'success' | 'error';
-  result: string | null;
-  newSessionId?: string;
-  error?: string;
-}
+import {
+  ContainerInput,
+  ContainerOutput,
+  OpenCodeRunner,
+  RunnerOptions,
+  RunnerResult,
+} from './runners/opencode.js';
 
 interface SessionEntry {
   sessionId: string;

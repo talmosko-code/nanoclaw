@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 
-interface ContainerInput {
+export interface ContainerInput {
   prompt: string;
   sessionId?: string;
   groupFolder: string;
@@ -11,25 +11,27 @@ interface ContainerInput {
   script?: string;
 }
 
-interface RunnerOptions {
+export interface ContainerOutput {
+  status: 'success' | 'error';
+  result: string | null;
+  newSessionId?: string;
+  error?: string;
+}
+
+export interface RunnerOptions {
   prompt: string;
   sessionId?: string;
   containerInput: ContainerInput;
   mcpServerPath: string;
   sdkEnv: Record<string, string | undefined>;
   resumeAt?: string;
-  onOutput: (output: {
-    status: 'success' | 'error';
-    result: string | null;
-    newSessionId?: string;
-    error?: string;
-  }) => void;
+  onOutput: (output: ContainerOutput) => void;
   shouldClose: () => boolean;
   drainIpcInput: () => string[];
   log: (msg: string) => void;
 }
 
-interface RunnerResult {
+export interface RunnerResult {
   newSessionId?: string;
   lastAssistantUuid?: string;
   closedDuringQuery: boolean;
