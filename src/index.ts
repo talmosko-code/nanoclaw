@@ -470,7 +470,6 @@ async function runAgent(
         deleteSession(group.folder);
       }
 
-
       logger.error(
         { group: group.name, error: output.error },
         'Container agent error',
