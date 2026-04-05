@@ -8,6 +8,7 @@ import os from 'os';
 import path from 'path';
 
 import {
+  AGENT_RUNNER,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -69,7 +70,7 @@ function buildVolumeMounts(
 
   if (isMain) {
     // Main gets the project root read-only. Writable paths the agent needs
-    // (group folder, IPC, .claude/) are mounted separately below.
+    // (store, group folder, IPC, .claude/) are mounted separately below.
     // Read-only prevents the agent from modifying host application code
     // (src/, dist/, package.json, etc.) which would bypass the sandbox
     // entirely on next restart.
@@ -113,6 +114,15 @@ function buildVolumeMounts(
         readonly: true,
       });
     }
+
+    // Main gets writable access to the store (SQLite DB) so it can
+    // query and write to the database directly.
+    const storeDir = path.join(projectRoot, 'store');
+    mounts.push({
+      hostPath: storeDir,
+      containerPath: '/workspace/project/store',
+      readonly: false,
+    });
 
     // Main also gets its group folder as the working directory
     mounts.push({
@@ -262,8 +272,8 @@ function buildVolumeMounts(
   // Per-group OpenCode session data directory.
   // Mounted at XDG_DATA_HOME/opencode so sessions persist across container restarts.
   // Only created/mounted when AGENT_RUNNER=opencode to avoid unnecessary dirs.
-  const ocEnv = readEnvFile(['AGENT_RUNNER']);
-  if (ocEnv.AGENT_RUNNER === 'opencode') {
+  const effectiveMountRunner = group.containerConfig?.agentRunner || AGENT_RUNNER;
+  if (effectiveMountRunner === 'opencode') {
     const groupOpencodeDir = path.join(
       DATA_DIR,
       'sessions',
@@ -401,6 +411,7 @@ function buildVolumeMounts(
 }
 
 function buildContainerArgs(
+  group: RegisteredGroup,
   mounts: VolumeMount[],
   containerName: string,
 ): string[] {
@@ -445,19 +456,25 @@ function buildContainerArgs(
     args.push('-e', `ANTHROPIC_DEFAULT_SONNET_MODEL=${modelToUse}`);
   }
 
-  // OpenCode runner configuration (non-secret labels safe to pass as env vars)
-  if (envVars.AGENT_RUNNER)
-    args.push('-e', `AGENT_RUNNER=${envVars.AGENT_RUNNER}`);
-  if (envVars.OPENCODE_PROVIDER)
-    args.push('-e', `OPENCODE_PROVIDER=${envVars.OPENCODE_PROVIDER}`);
-  if (envVars.OPENCODE_MODEL)
-    args.push('-e', `OPENCODE_MODEL=${envVars.OPENCODE_MODEL}`);
-  if (envVars.OPENCODE_SMALL_MODEL)
-    args.push('-e', `OPENCODE_SMALL_MODEL=${envVars.OPENCODE_SMALL_MODEL}`);
-  // Force XDG_DATA_HOME so OpenCode writes session data to the mounted directory
-  // regardless of whether the container runs as root or as node (uid 1000)
-  if (envVars.AGENT_RUNNER === 'opencode') {
+  // Pass agent runner selection (per-group override or global default)
+  const effectiveRunner = group.containerConfig?.agentRunner || AGENT_RUNNER;
+  args.push('-e', `AGENT_RUNNER=${effectiveRunner}`);
+
+  // Pass OpenCode provider/model env vars when using opencode runner
+  if (effectiveRunner === 'opencode') {
+    if (envVars.OPENCODE_PROVIDER)
+      args.push('-e', `OPENCODE_PROVIDER=${envVars.OPENCODE_PROVIDER}`);
+    if (envVars.OPENCODE_MODEL)
+      args.push('-e', `OPENCODE_MODEL=${envVars.OPENCODE_MODEL}`);
+    if (envVars.OPENCODE_SMALL_MODEL)
+      args.push('-e', `OPENCODE_SMALL_MODEL=${envVars.OPENCODE_SMALL_MODEL}`);
+    // Force XDG_DATA_HOME so OpenCode writes session data to the mounted directory
     args.push('-e', 'XDG_DATA_HOME=/home/node/.local/share');
+    // Exclude localhost from OneCLI proxy — OpenCode runs its own local
+    // server at 127.0.0.1:4096 that the SDK must reach directly.
+    // Without this, the proxy intercepts and closes the connection (ECONNRESET).
+    args.push('-e', 'NO_PROXY=127.0.0.1,localhost');
+    args.push('-e', 'no_proxy=127.0.0.1,localhost');
   }
 
   // Runtime-specific args for host gateway resolution
@@ -516,7 +533,7 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const containerArgs = buildContainerArgs(group, mounts, containerName);
 
   logger.debug(
     {
