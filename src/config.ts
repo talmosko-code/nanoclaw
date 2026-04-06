@@ -71,6 +71,10 @@ export const MAX_CONCURRENT_CONTAINERS = Math.max(
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
 );
 
+// Global default agent runner (can be overridden per-group via containerConfig)
+export const AGENT_RUNNER =
+  process.env.AGENT_RUNNER || envConfig.AGENT_RUNNER || 'anthropic';
+
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -103,6 +107,3 @@ function resolveConfigTimezone(): string {
 }
 export const TIMEZONE = resolveConfigTimezone();
 
-// Agent runner selection: 'anthropic' (default) or 'opencode'
-export const AGENT_RUNNER =
-  process.env.AGENT_RUNNER || envConfig.AGENT_RUNNER || 'anthropic';
