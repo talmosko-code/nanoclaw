@@ -29,11 +29,10 @@ import {
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
-import { readEnvFile } from './env.js';
-
-const onecli = new OneCLI({ url: ONECLI_URL });
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
+
+const onecli = new OneCLI({ url: ONECLI_URL });
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -456,34 +455,6 @@ async function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
-
-  // Pass agent runner selection (per-group override or global default)
-  const effectiveRunner = group.containerConfig?.agentRunner || AGENT_RUNNER;
-  args.push('-e', `AGENT_RUNNER=${effectiveRunner}`);
-
-  // Pass OpenCode provider/model env vars when using opencode runner
-  if (effectiveRunner === 'opencode') {
-    const envVars = readEnvFile([
-      'OPENCODE_PROVIDER',
-      'OPENCODE_MODEL',
-      'OPENCODE_SMALL_MODEL',
-    ]);
-    if (envVars.OPENCODE_PROVIDER)
-      args.push('-e', `OPENCODE_PROVIDER=${envVars.OPENCODE_PROVIDER}`);
-    if (envVars.OPENCODE_MODEL)
-      args.push('-e', `OPENCODE_MODEL=${envVars.OPENCODE_MODEL}`);
-    if (envVars.OPENCODE_SMALL_MODEL)
-      args.push('-e', `OPENCODE_SMALL_MODEL=${envVars.OPENCODE_SMALL_MODEL}`);
-    args.push('-e', 'XDG_DATA_HOME=/home/node/.local/share');
-    // OpenCode runs its own local gRPC/HTTP server at 127.0.0.1:4096 and the
-    // SDK must reach it directly — bypassing OneCLI's MITM proxy.
-    // NO_PROXY tells standard HTTP clients to skip the proxy for loopback traffic.
-    // TODO: OneCLI may bind to different addresses per OS; coordinate with the
-    // OneCLI team to find a proper first-class way to exclude localhost rather
-    // than relying on NO_PROXY (tracked: cc @guyb1).
-    args.push('-e', 'NO_PROXY=127.0.0.1,localhost');
-    args.push('-e', 'no_proxy=127.0.0.1,localhost');
-  }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
