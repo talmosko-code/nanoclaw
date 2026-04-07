@@ -249,6 +249,15 @@ function buildVolumeMounts(
       2,
     ) + '\n',
   );
+  // Ensure settings.json is owned by the container's node user (uid 1000).
+  // When the host runs as root, writeFileSync creates a root-owned file which
+  // blocks the entrypoint's RTK hook registration (runs as uid 1000 inside the
+  // container and tries to overwrite settings.json at line 50).
+  try {
+    fs.chownSync(settingsFile, 1000, 1000);
+  } catch {
+    // Non-root hosts or restricted environments: best-effort, ignore failure
+  }
 
   // Sync skills from container/skills/ into each group's .claude/skills/
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
