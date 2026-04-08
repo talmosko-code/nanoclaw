@@ -91,7 +91,7 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
-// Last trigger message per chat — used for reactions (👀/👍/❌)
+// Last trigger message per chat — used for reactions (👀/👍/👎)
 const lastTriggerMessage: Record<
   string,
   { messageId: string; messageKey: unknown }
@@ -424,7 +424,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           chatJid,
           lastMsgErr.messageId,
           lastMsgErr.messageKey,
-          '❌',
+          '👎',
         )
         .catch(() => {});
     }
