@@ -92,7 +92,10 @@ let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
 // Last trigger message per chat — used for reactions (👀/✅/❌)
-const lastTriggerMessage: Record<string, { messageId: string; messageKey: unknown }> = {};
+const lastTriggerMessage: Record<
+  string,
+  { messageId: string; messageKey: unknown }
+> = {};
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -348,12 +351,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const lastMsg = lastTriggerMessage[chatJid];
   if (lastMsg) {
-    await channel.sendReaction?.(chatJid, lastMsg.messageId, lastMsg.messageKey, '👀').catch(() => {});
+    await channel
+      .sendReaction?.(chatJid, lastMsg.messageId, lastMsg.messageKey, '👀')
+      .catch(() => {});
   }
 
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
+  let successReactionSent = false;
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
@@ -375,6 +381,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
     if (result.status === 'success') {
       queue.notifyIdle(chatJid);
+      if (!successReactionSent) {
+        successReactionSent = true;
+        await channel.setTyping?.(chatJid, false);
+        const lastMsgSuccess = lastTriggerMessage[chatJid];
+        if (lastMsgSuccess) {
+          await channel
+            .sendReaction?.(chatJid, lastMsgSuccess.messageId, lastMsgSuccess.messageKey, '✅')
+            .catch(() => {});
+        }
+      }
     }
 
     if (result.status === 'error') {
@@ -391,13 +407,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
   });
 
-  await channel.setTyping?.(chatJid, false);
+  if (!successReactionSent) await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
     const lastMsgErr = lastTriggerMessage[chatJid];
     if (lastMsgErr) {
-      await channel.sendReaction?.(chatJid, lastMsgErr.messageId, lastMsgErr.messageKey, '❌').catch(() => {});
+      await channel
+        .sendReaction?.(
+          chatJid,
+          lastMsgErr.messageId,
+          lastMsgErr.messageKey,
+          '❌',
+        )
+        .catch(() => {});
     }
     // If we already sent output to the user, don't roll back the cursor —
     // the user got their response and re-processing would send duplicates.
@@ -418,9 +441,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     return false;
   }
 
-  const lastMsgOk = lastTriggerMessage[chatJid];
-  if (lastMsgOk) {
-    await channel.sendReaction?.(chatJid, lastMsgOk.messageId, lastMsgOk.messageKey, '✅').catch(() => {});
+  if (!successReactionSent) {
+    const lastMsgOk = lastTriggerMessage[chatJid];
+    if (lastMsgOk) {
+      await channel
+        .sendReaction?.(chatJid, lastMsgOk.messageId, lastMsgOk.messageKey, '✅')
+        .catch(() => {});
+    }
   }
 
   return true;
