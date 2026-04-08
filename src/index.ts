@@ -91,7 +91,7 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
-// Last trigger message per chat — used for reactions (👀/✅/❌)
+// Last trigger message per chat — used for reactions (👀/👍/❌)
 const lastTriggerMessage: Record<
   string,
   { messageId: string; messageKey: unknown }
@@ -385,10 +385,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         successReactionSent = true;
         await channel.setTyping?.(chatJid, false);
         const lastMsgSuccess = lastTriggerMessage[chatJid];
+        logger.info({ chatJid, lastMsgSuccess }, 'Sending success reaction');
         if (lastMsgSuccess) {
           await channel
-            .sendReaction?.(chatJid, lastMsgSuccess.messageId, lastMsgSuccess.messageKey, '✅')
-            .catch(() => {});
+            .sendReaction?.(
+              chatJid,
+              lastMsgSuccess.messageId,
+              lastMsgSuccess.messageKey,
+              '👍',
+            )
+            .catch((err) => logger.warn({ err }, 'sendReaction ✅ failed'));
         }
       }
     }
@@ -445,7 +451,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     const lastMsgOk = lastTriggerMessage[chatJid];
     if (lastMsgOk) {
       await channel
-        .sendReaction?.(chatJid, lastMsgOk.messageId, lastMsgOk.messageKey, '✅')
+        .sendReaction?.(
+          chatJid,
+          lastMsgOk.messageId,
+          lastMsgOk.messageKey,
+          '👍',
+        )
         .catch(() => {});
     }
   }

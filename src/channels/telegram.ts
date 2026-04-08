@@ -495,7 +495,10 @@ export class TelegramChannel implements Channel {
             `${summary}…\n\n[המשך קריאה](${url})`,
             threadOpts,
           );
-          logger.info({ jid, threadId, url }, 'Telegram message published to Telegraph');
+          logger.info(
+            { jid, threadId, url },
+            'Telegram message published to Telegraph',
+          );
           return;
         }
       }
@@ -547,26 +550,40 @@ export class TelegramChannel implements Channel {
 
     if (!isTyping) {
       const interval = this.typingIntervals.get(jid);
-      if (interval) { clearInterval(interval); this.typingIntervals.delete(jid); }
+      if (interval) {
+        clearInterval(interval);
+        this.typingIntervals.delete(jid);
+      }
       return;
     }
 
-    const send = () => this.bot!.api.sendChatAction(numericId, 'typing', opts).catch(() => {});
+    const send = () =>
+      this.bot!.api.sendChatAction(numericId, 'typing', opts).catch(() => {});
     send();
     this.typingIntervals.set(jid, setInterval(send, 4000));
   }
 
-  async sendReaction(jid: string, messageId: string, _messageKey: unknown, emoji: string): Promise<void> {
+  async sendReaction(
+    jid: string,
+    messageId: string,
+    _messageKey: unknown,
+    emoji: string,
+  ): Promise<void> {
     if (!this.bot) return;
     try {
       const numericId = jid.replace(/^tg:/, '');
       await this.bot.api.setMessageReaction(
         numericId,
         parseInt(messageId, 10),
-        [{ type: 'emoji', emoji } as import('@grammyjs/types').ReactionTypeEmoji],
+        [
+          {
+            type: 'emoji',
+            emoji,
+          } as import('@grammyjs/types').ReactionTypeEmoji,
+        ],
       );
     } catch (err) {
-      logger.debug({ jid, err }, 'Failed to send Telegram reaction');
+      logger.warn({ jid, messageId, emoji, err }, 'Failed to send Telegram reaction');
     }
   }
 }
