@@ -10,6 +10,7 @@ import { getLastThreadId } from '../db.js';
 import { readEnvFile } from '../env.js';
 import { resolveGroupIpcPath } from '../group-folder.js';
 import { logger } from '../logger.js';
+import { TELEGRAPH_THRESHOLD, publishToTelegraph } from '../telegraph.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -119,6 +120,7 @@ export class TelegramChannel implements Channel {
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
   private botToken: string;
+  private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
 
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
@@ -263,6 +265,7 @@ export class TelegramChannel implements Channel {
         timestamp,
         is_from_me: false,
         thread_id: threadId,
+        messageId: msgId,
       });
 
       logger.info(
@@ -482,6 +485,21 @@ export class TelegramChannel implements Channel {
       const threadOpts =
         threadId !== undefined ? { message_thread_id: threadId } : {};
 
+      if (text.length > TELEGRAPH_THRESHOLD) {
+        const url = await publishToTelegraph('Response', text);
+        if (url) {
+          const summary = text.slice(0, 200).replace(/\n/g, ' ');
+          await sendTelegramMessage(
+            this.bot.api,
+            numericId,
+            `${summary}…\n\n[המשך קריאה](${url})`,
+            threadOpts,
+          );
+          logger.info({ jid, threadId, url }, 'Telegram message published to Telegraph');
+          return;
+        }
+      }
+
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
       if (text.length <= MAX_LENGTH) {
@@ -522,15 +540,33 @@ export class TelegramChannel implements Channel {
   }
 
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
-    if (!this.bot || !isTyping) return;
+    if (!this.bot) return;
+    const numericId = jid.replace(/^tg:/, '');
+    const threadId = getLastThreadId(jid);
+    const opts = threadId !== undefined ? { message_thread_id: threadId } : {};
+
+    if (!isTyping) {
+      const interval = this.typingIntervals.get(jid);
+      if (interval) { clearInterval(interval); this.typingIntervals.delete(jid); }
+      return;
+    }
+
+    const send = () => this.bot!.api.sendChatAction(numericId, 'typing', opts).catch(() => {});
+    send();
+    this.typingIntervals.set(jid, setInterval(send, 4000));
+  }
+
+  async sendReaction(jid: string, messageId: string, _messageKey: unknown, emoji: string): Promise<void> {
+    if (!this.bot) return;
     try {
       const numericId = jid.replace(/^tg:/, '');
-      const threadId = getLastThreadId(jid);
-      const opts =
-        threadId !== undefined ? { message_thread_id: threadId } : {};
-      await this.bot.api.sendChatAction(numericId, 'typing', opts);
+      await this.bot.api.setMessageReaction(
+        numericId,
+        parseInt(messageId, 10),
+        [{ type: 'emoji', emoji } as import('@grammyjs/types').ReactionTypeEmoji],
+      );
     } catch (err) {
-      logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');
+      logger.debug({ jid, err }, 'Failed to send Telegram reaction');
     }
   }
 }

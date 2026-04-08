@@ -91,6 +91,9 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
+// Last trigger message per chat — used for reactions (👀/✅/❌)
+const lastTriggerMessage: Record<string, { messageId: string; messageKey: unknown }> = {};
+
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
@@ -343,6 +346,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
+  const lastMsg = lastTriggerMessage[chatJid];
+  if (lastMsg) {
+    await channel.sendReaction?.(chatJid, lastMsg.messageId, lastMsg.messageKey, '👀').catch(() => {});
+  }
+
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
@@ -387,6 +395,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
+    const lastMsgErr = lastTriggerMessage[chatJid];
+    if (lastMsgErr) {
+      await channel.sendReaction?.(chatJid, lastMsgErr.messageId, lastMsgErr.messageKey, '❌').catch(() => {});
+    }
     // If we already sent output to the user, don't roll back the cursor —
     // the user got their response and re-processing would send duplicates.
     if (outputSentToUser) {
@@ -404,6 +416,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       'Agent error, rolled back message cursor for retry',
     );
     return false;
+  }
+
+  const lastMsgOk = lastTriggerMessage[chatJid];
+  if (lastMsgOk) {
+    await channel.sendReaction?.(chatJid, lastMsgOk.messageId, lastMsgOk.messageKey, '✅').catch(() => {});
   }
 
   return true;
@@ -778,6 +795,13 @@ async function main(): Promise<void> {
         }
       }
       storeMessage(msg);
+      // Track the last user message per chat for reactions
+      if (!msg.is_bot_message) {
+        lastTriggerMessage[chatJid] = {
+          messageId: msg.messageId || msg.id,
+          messageKey: msg.messageKey ?? null,
+        };
+      }
     },
     onChatMetadata: (
       chatJid: string,

@@ -60,6 +60,8 @@ export interface NewMessage {
   reply_to_message_id?: string;
   reply_to_message_content?: string;
   reply_to_sender_name?: string;
+  messageId?: string;   // platform message ID for reactions (Telegram message_id, WhatsApp key.id)
+  messageKey?: unknown; // WhatsApp message key object for reactions
 }
 
 export interface ScheduledTask {
@@ -100,6 +102,8 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: send a reaction emoji to a specific message.
+  sendReaction?(jid: string, messageId: string, messageKey: unknown, emoji: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

@@ -12,6 +12,7 @@ import makeWASocket, {
   fetchLatestWaWebVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
+  proto,
 } from '@whiskeysockets/baileys';
 
 import {
@@ -19,6 +20,7 @@ import {
   ASSISTANT_NAME,
   STORE_DIR,
 } from '../config.js';
+import { TELEGRAPH_THRESHOLD, publishToTelegraph } from '../telegraph.js';
 import { resolveGroupIpcPath } from '../group-folder.js';
 import { getLastGroupSync, setLastGroupSync, updateChatName } from '../db.js';
 import { logger } from '../logger.js';
@@ -302,6 +304,8 @@ export class WhatsAppChannel implements Channel {
             timestamp,
             is_from_me: fromMe,
             is_bot_message: isBotMessage,
+            messageId: msg.key.id || '',
+            messageKey: msg.key,
           });
         }
       }
@@ -325,6 +329,22 @@ export class WhatsAppChannel implements Channel {
       );
       return;
     }
+
+    if (text.length > TELEGRAPH_THRESHOLD) {
+      const url = await publishToTelegraph('Response', text);
+      if (url) {
+        const summary = text.slice(0, 200).replace(/\n/g, ' ');
+        const prefix = ASSISTANT_HAS_OWN_NUMBER ? '' : `${ASSISTANT_NAME}: `;
+        try {
+          await this.sock.sendMessage(jid, { text: `${prefix}${summary}…\n\n${url}` });
+          logger.info({ jid, url }, 'WhatsApp message published to Telegraph');
+          return;
+        } catch (err) {
+          logger.warn({ jid, err }, 'Failed to send Telegraph URL, falling back');
+        }
+      }
+    }
+
     try {
       await this.sock.sendMessage(jid, { text: prefixed });
       logger.info({ jid, length: prefixed.length }, 'Message sent');
@@ -335,6 +355,15 @@ export class WhatsAppChannel implements Channel {
         { jid, err, queueSize: this.outgoingQueue.length },
         'Failed to send, message queued',
       );
+    }
+  }
+
+  async sendReaction(jid: string, _messageId: string, messageKey: unknown, emoji: string): Promise<void> {
+    if (!this.connected || !messageKey) return;
+    try {
+      await this.sock.sendMessage(jid, { react: { text: emoji, key: messageKey as proto.IMessageKey } });
+    } catch (err) {
+      logger.debug({ jid, err }, 'Failed to send WhatsApp reaction');
     }
   }
 
