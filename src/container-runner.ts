@@ -489,7 +489,11 @@ async function buildContainerArgs(
     'OPENCODE_PROVIDER',
     'OPENCODE_MODEL',
     'OPENCODE_SMALL_MODEL',
+    'TELEGRAPH_ACCESS_TOKEN',
   ]);
+  if (envVars.TELEGRAPH_ACCESS_TOKEN)
+    args.push('-e', `TELEGRAPH_ACCESS_TOKEN=${envVars.TELEGRAPH_ACCESS_TOKEN}`);
+
   const modelToUse = envVars.ANTHROPIC_MODEL;
 
   if (modelToUse) {
