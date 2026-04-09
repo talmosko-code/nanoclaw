@@ -336,11 +336,16 @@ export class WhatsAppChannel implements Channel {
         const summary = text.slice(0, 200).replace(/\n/g, ' ');
         const prefix = ASSISTANT_HAS_OWN_NUMBER ? '' : `${ASSISTANT_NAME}: `;
         try {
-          await this.sock.sendMessage(jid, { text: `${prefix}${summary}…\n\n${url}` });
+          await this.sock.sendMessage(jid, {
+            text: `${prefix}${summary}…\n\n${url}`,
+          });
           logger.info({ jid, url }, 'WhatsApp message published to Telegraph');
           return;
         } catch (err) {
-          logger.warn({ jid, err }, 'Failed to send Telegraph URL, falling back');
+          logger.warn(
+            { jid, err },
+            'Failed to send Telegraph URL, falling back',
+          );
         }
       }
     }
@@ -358,10 +363,18 @@ export class WhatsAppChannel implements Channel {
     }
   }
 
-  async sendReaction(jid: string, _messageId: string, messageKey: unknown, emoji: string): Promise<void> {
+  async sendReaction(
+    jid: string,
+    _messageId: string,
+    messageKey: unknown,
+    emoji: string,
+    _threadId?: number,
+  ): Promise<void> {
     if (!this.connected || !messageKey) return;
     try {
-      await this.sock.sendMessage(jid, { react: { text: emoji, key: messageKey as proto.IMessageKey } });
+      await this.sock.sendMessage(jid, {
+        react: { text: emoji, key: messageKey as proto.IMessageKey },
+      });
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send WhatsApp reaction');
     }

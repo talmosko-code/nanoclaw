@@ -568,22 +568,27 @@ export class TelegramChannel implements Channel {
     messageId: string,
     _messageKey: unknown,
     emoji: string,
+    threadId?: number,
   ): Promise<void> {
     if (!this.bot) return;
     try {
       const numericId = jid.replace(/^tg:/, '');
-      await this.bot.api.setMessageReaction(
-        numericId,
-        parseInt(messageId, 10),
-        [
+      await this.bot.api.raw.setMessageReaction({
+        chat_id: numericId,
+        message_id: parseInt(messageId, 10),
+        reaction: [
           {
             type: 'emoji',
             emoji,
           } as import('@grammyjs/types').ReactionTypeEmoji,
         ],
-      );
+        ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
+      });
     } catch (err) {
-      logger.warn({ jid, messageId, emoji, err }, 'Failed to send Telegram reaction');
+      logger.warn(
+        { jid, messageId, emoji, threadId, err },
+        'Failed to send Telegram reaction',
+      );
     }
   }
 }

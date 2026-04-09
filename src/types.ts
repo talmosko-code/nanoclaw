@@ -60,7 +60,7 @@ export interface NewMessage {
   reply_to_message_id?: string;
   reply_to_message_content?: string;
   reply_to_sender_name?: string;
-  messageId?: string;   // platform message ID for reactions (Telegram message_id, WhatsApp key.id)
+  messageId?: string; // platform message ID for reactions (Telegram message_id, WhatsApp key.id)
   messageKey?: unknown; // WhatsApp message key object for reactions
 }
 
@@ -103,7 +103,14 @@ export interface Channel {
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
   // Optional: send a reaction emoji to a specific message.
-  sendReaction?(jid: string, messageId: string, messageKey: unknown, emoji: string): Promise<void>;
+  sendReaction?(
+    jid: string,
+    messageId: string,
+    messageKey: unknown,
+    emoji: string,
+    /** Telegram forum / topic id — required for setMessageReaction in topics */
+    threadId?: number,
+  ): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

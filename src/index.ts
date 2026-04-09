@@ -94,7 +94,7 @@ let messageLoopRunning = false;
 // Last trigger message per chat — used for reactions (👀/👍/👎)
 const lastTriggerMessage: Record<
   string,
-  { messageId: string; messageKey: unknown }
+  { messageId: string; messageKey: unknown; threadId?: number }
 > = {};
 
 const channels: Channel[] = [];
@@ -352,7 +352,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const lastMsg = lastTriggerMessage[chatJid];
   if (lastMsg) {
     await channel
-      .sendReaction?.(chatJid, lastMsg.messageId, lastMsg.messageKey, '👀')
+      .sendReaction?.(
+        chatJid,
+        lastMsg.messageId,
+        lastMsg.messageKey,
+        '👀',
+        lastMsg.threadId,
+      )
       .catch(() => {});
   }
 
@@ -393,6 +399,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
               lastMsgSuccess.messageId,
               lastMsgSuccess.messageKey,
               '👍',
+              lastMsgSuccess.threadId,
             )
             .catch((err) => logger.warn({ err }, 'sendReaction ✅ failed'));
         }
@@ -425,6 +432,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           lastMsgErr.messageId,
           lastMsgErr.messageKey,
           '👎',
+          lastMsgErr.threadId,
         )
         .catch(() => {});
     }
@@ -456,6 +464,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           lastMsgOk.messageId,
           lastMsgOk.messageKey,
           '👍',
+          lastMsgOk.threadId,
         )
         .catch(() => {});
     }
@@ -838,6 +847,7 @@ async function main(): Promise<void> {
         lastTriggerMessage[chatJid] = {
           messageId: msg.messageId || msg.id,
           messageKey: msg.messageKey ?? null,
+          threadId: msg.thread_id,
         };
       }
     },
