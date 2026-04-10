@@ -97,6 +97,10 @@ const lastTriggerMessage: Record<
   { messageId: string; messageKey: unknown; threadId?: number }
 > = {};
 
+// One thumbs-up per user turn; long-lived OpenCode/IPC containers reuse the same stream callback,
+// so a one-shot "successReactionSent" blocked typing/reactions on follow-up messages.
+const pendingThumbReaction: Record<string, boolean> = {};
+
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
@@ -365,7 +369,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
-  let successReactionSent = false;
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
@@ -387,22 +390,22 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
     if (result.status === 'success') {
       queue.notifyIdle(chatJid);
-      if (!successReactionSent) {
-        successReactionSent = true;
-        await channel.setTyping?.(chatJid, false);
-        const lastMsgSuccess = lastTriggerMessage[chatJid];
+      // Clear typing on every streamed success so follow-up IPC turns do not leave the
+      // Telegram interval running (typingIntervals in telegram.ts).
+      await channel.setTyping?.(chatJid, false);
+      const lastMsgSuccess = lastTriggerMessage[chatJid];
+      if (pendingThumbReaction[chatJid] && lastMsgSuccess && outputSentToUser) {
+        pendingThumbReaction[chatJid] = false;
         logger.info({ chatJid, lastMsgSuccess }, 'Sending success reaction');
-        if (lastMsgSuccess) {
-          await channel
-            .sendReaction?.(
-              chatJid,
-              lastMsgSuccess.messageId,
-              lastMsgSuccess.messageKey,
-              '👍',
-              lastMsgSuccess.threadId,
-            )
-            .catch((err) => logger.warn({ err }, 'sendReaction ✅ failed'));
-        }
+        await channel
+          .sendReaction?.(
+            chatJid,
+            lastMsgSuccess.messageId,
+            lastMsgSuccess.messageKey,
+            '👍',
+            lastMsgSuccess.threadId,
+          )
+          .catch((err) => logger.warn({ err }, 'sendReaction ✅ failed'));
       }
     }
 
@@ -420,10 +423,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
   });
 
-  if (!successReactionSent) await channel.setTyping?.(chatJid, false);
+  await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
+    pendingThumbReaction[chatJid] = false;
     const lastMsgErr = lastTriggerMessage[chatJid];
     if (lastMsgErr) {
       await channel
@@ -455,7 +459,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     return false;
   }
 
-  if (!successReactionSent) {
+  if (pendingThumbReaction[chatJid]) {
+    pendingThumbReaction[chatJid] = false;
     const lastMsgOk = lastTriggerMessage[chatJid];
     if (lastMsgOk) {
       await channel
@@ -563,7 +568,7 @@ async function runAgent(
       const isStaleSession =
         sessionId &&
         output.error &&
-        /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
+        /\bNotFoundError\b|no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
           output.error,
         );
 
@@ -708,8 +713,20 @@ async function startMessageLoop(): Promise<void> {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
+            const lastPiped = lastTriggerMessage[chatJid];
+            if (lastPiped) {
+              await channel
+                .sendReaction?.(
+                  chatJid,
+                  lastPiped.messageId,
+                  lastPiped.messageKey,
+                  '👀',
+                  lastPiped.threadId,
+                )
+                .catch(() => {});
+            }
             // Show typing indicator while the container processes the piped message
-            channel
+            await channel
               .setTyping?.(chatJid, true)
               ?.catch((err) =>
                 logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
@@ -849,6 +866,7 @@ async function main(): Promise<void> {
           messageKey: msg.messageKey ?? null,
           threadId: msg.thread_id,
         };
+        pendingThumbReaction[chatJid] = true;
       }
     },
     onChatMetadata: (

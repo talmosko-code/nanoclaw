@@ -23,7 +23,9 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 
 ## Secrets / Credentials / Proxy (OneCLI)
 
-API keys, secret keys, OAuth tokens, and auth credentials are managed by the OneCLI gateway — which handles secret injection into containers at request time, so no keys or tokens are ever passed to containers directly. Run `onecli --help`.
+API keys, secret keys, OAuth tokens, and auth credentials are managed by the OneCLI gateway — which handles secret injection into containers at request time, so no keys or tokens are ever passed to containers directly. Run `onecli --help`. Agents use **`secretMode`**: with **`selective`**, only secrets you assign (`onecli agents secrets`, `onecli agents set-secrets`) are injected; with **`all`**, every vault secret can apply. A common **401** from OpenRouter is **selective** + missing **`openrouter.ai` / `api.openrouter.ai`** on that agent.
+
+**Gateway DNS:** `onecli-gateway-host` may keep a Docker-generated `/etc/resolv.conf` with **`nameserver 127.0.0.1`** from an old host setup. If nothing listens on **`127.0.0.1:53`**, MITM/upstream resolution can break. **Recreate** the container (same image, env, and `/app/data` bind) after fixing host `resolv.conf` so nameservers match the host — `docker restart` alone often does not refresh that file.
 
 ## Skills
 
@@ -69,6 +71,11 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
 systemctl --user start nanoclaw
 systemctl --user stop nanoclaw
 systemctl --user restart nanoclaw
+
+# Linux (systemd, system-wide unit — e.g. /etc/systemd/system/nanoclaw.service)
+sudo systemctl start nanoclaw
+sudo systemctl stop nanoclaw
+sudo systemctl restart nanoclaw
 ```
 
 ## Troubleshooting
