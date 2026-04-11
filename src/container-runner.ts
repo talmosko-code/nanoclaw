@@ -332,6 +332,12 @@ function buildVolumeMounts(
     try {
       fs.copyFileSync(hostCredentials, sessionCredentials);
       fs.chmodSync(sessionCredentials, 0o644);
+      // Same as settings.json: root-owned 600 on the host would block uid 1000 in the container.
+      try {
+        fs.chownSync(sessionCredentials, 1000, 1000);
+      } catch {
+        /* non-root host */
+      }
     } catch (err) {
       logger.warn({ err }, 'Failed to sync credentials into session dir');
     }
