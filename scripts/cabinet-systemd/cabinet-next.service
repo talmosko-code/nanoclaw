@@ -1,0 +1,19 @@
+[Unit]
+Description=Cabinet Next.js (production)
+After=network.target
+
+[Service]
+Type=simple
+User=developer
+Group=developer
+WorkingDirectory=/home/developer/cabinet
+Environment=HOME=/home/developer
+Environment=NODE_ENV=production
+# Optional: KEY=value only (no comments).
+# EnvironmentFile=-/home/developer/cabinet/.env.production
+ExecStart=/usr/bin/npm run start:next
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

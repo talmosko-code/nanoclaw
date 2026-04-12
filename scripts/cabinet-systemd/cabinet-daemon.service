@@ -1,0 +1,18 @@
+[Unit]
+Description=Cabinet daemon (jobs, terminal, WebSocket)
+After=network.target
+
+[Service]
+Type=simple
+User=developer
+Group=developer
+WorkingDirectory=/home/developer/cabinet
+Environment=HOME=/home/developer
+Environment=NODE_ENV=production
+# EnvironmentFile=-/home/developer/cabinet/.env.production
+ExecStart=/usr/bin/npm run start:daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
