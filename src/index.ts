@@ -8,6 +8,7 @@ import {
   ASSISTANT_NAME,
   DEFAULT_TRIGGER,
   getTriggerPattern,
+  GROUP_NAMES_PATH,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   MAX_MESSAGES_PER_PROMPT,
@@ -24,6 +25,18 @@ function matchesTrigger(content: string, groupTrigger?: string): boolean {
     return new RegExp(`(?:^|\\s)${escaped}(?:\\s|$)`, 'i').test(content);
   }
   return false;
+}
+
+function getGroupAssistantName(groupFolder: string): string {
+  try {
+    if (fs.existsSync(GROUP_NAMES_PATH)) {
+      const groupNames = JSON.parse(fs.readFileSync(GROUP_NAMES_PATH, 'utf-8'));
+      return groupNames[groupFolder] || ASSISTANT_NAME;
+    }
+  } catch {
+    // Fallback to default
+  }
+  return ASSISTANT_NAME;
 }
 import './channels/index.js';
 import {
@@ -548,7 +561,7 @@ async function runAgent(
         groupFolder: group.folder,
         chatJid,
         isMain,
-        assistantName: ASSISTANT_NAME,
+        assistantName: getGroupAssistantName(group.folder),
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),

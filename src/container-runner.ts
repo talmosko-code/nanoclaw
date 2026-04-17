@@ -215,8 +215,9 @@ function buildVolumeMounts(
       for (const [name, cfg] of Object.entries(projectMcps) as Array<
         [string, Record<string, unknown>]
       >) {
-        if (cfg.command) {
-          // Local stdio MCP — pass through as-is (Claude Code format); opencode.ts translates it
+        if (cfg.command || cfg.type || cfg.url) {
+          // Local stdio MCP (command) or HTTP MCP (type/url) — pass through as-is (Claude Code format)
+          // Preserve headers if present (for HTTP auth)
           mcpServers[name] = cfg;
         }
       }
