@@ -31,6 +31,8 @@ export type AgentRunner = 'anthropic' | 'opencode';
 
 export interface ContainerConfig {
   agentRunner?: AgentRunner; // Per-group agent runner selection
+  /** Per-group MCP servers (Claude Code shape); merged into container settings after project ~/.claude.json */
+  mcpServers?: Record<string, unknown>;
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
   ownerBypass?: boolean; // Default: true — set to false to require trigger even from owner

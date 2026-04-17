@@ -226,6 +226,16 @@ function buildVolumeMounts(
     }
   }
 
+  // 3. Per-group MCP from groups/<folder>/container.json (stored in container_config)
+  const groupMcps = group.containerConfig?.mcpServers ?? {};
+  for (const [name, cfg] of Object.entries(groupMcps) as Array<
+    [string, Record<string, unknown>]
+  >) {
+    if (cfg && typeof cfg === 'object' && (cfg.command || cfg.type || cfg.url)) {
+      mcpServers[name] = cfg;
+    }
+  }
+
   // Always overwrite settings.json so MCP config changes take effect
   // without needing to manually update existing sessions.
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
