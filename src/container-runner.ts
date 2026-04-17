@@ -231,7 +231,11 @@ function buildVolumeMounts(
   for (const [name, cfg] of Object.entries(groupMcps) as Array<
     [string, Record<string, unknown>]
   >) {
-    if (cfg && typeof cfg === 'object' && (cfg.command || cfg.type || cfg.url)) {
+    if (
+      cfg &&
+      typeof cfg === 'object' &&
+      (cfg.command || cfg.type || cfg.url)
+    ) {
       mcpServers[name] = cfg;
     }
   }
