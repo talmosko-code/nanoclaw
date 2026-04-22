@@ -4,7 +4,7 @@
 // discord
 
 // gmail
-import './gmail.js';
+// import './gmail.js'; // Disabled - use Gmail MCP tool instead for sending emails
 
 // slack
 
