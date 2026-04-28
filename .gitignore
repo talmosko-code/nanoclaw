@@ -9,11 +9,10 @@ store/
 data/
 logs/
 
-# Groups - track only CLAUDE.md for any group
-groups/*
-!groups/*/
-groups/*/*
-!groups/*/CLAUDE.md
+# Local / private only — not published on public fork (keep in a private repo or backup)
+groups/
+.claude/skills/
+container/
 
 # Secrets
 *.keys.json
