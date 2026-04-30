@@ -279,7 +279,9 @@ function formatCodeCard(code: string): string {
     '',
     `   ${brandBold(spaced)}`,
     '',
-    k.dim('   Send this code to your bot from Telegram.'),
+    k.dim('   In a private chat with the bot: send exactly these four digits — nothing else.'),
+    k.dim('   In a group: use @YourBotName then the digits (Telegram privacy hides plain messages).'),
+    k.dim('   Wrong guesses invalidate the code; setup will show a new one automatically.'),
   ].join('\n');
 }
 

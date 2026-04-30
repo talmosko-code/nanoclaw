@@ -9,6 +9,11 @@
 # and `sudo systemctl start docker` are already in the allowlist.
 set -euo pipefail
 
+# Prefer Docker Desktop's bundled CLI before PATH (stale /usr/local/bin symlinks).
+if [[ "$(uname -s)" == "Darwin" ]] && [[ -x "/Applications/Docker.app/Contents/Resources/bin/docker" ]]; then
+  export PATH="/Applications/Docker.app/Contents/Resources/bin:${PATH}"
+fi
+
 echo "=== NANOCLAW SETUP: INSTALL_DOCKER ==="
 
 if command -v docker >/dev/null 2>&1; then

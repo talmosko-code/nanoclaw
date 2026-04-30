@@ -159,6 +159,13 @@ export interface ChannelAdapter {
    * Returning the same platform_id on repeated calls is expected.
    */
   openDM?(userHandle: string): Promise<string>;
+
+  /**
+   * Resolve a human-readable chat/channel title for a platform id (e.g. Telegram
+   * supergroup title via Bot API). Optional — omit when the host already has
+   * names from sync or metadata events.
+   */
+  resolveChannelName?(platformId: string): Promise<string | null>;
 }
 
 /** Factory function that creates a channel adapter (returns null if credentials missing). */

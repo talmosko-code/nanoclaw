@@ -8,6 +8,16 @@
 
 set -e
 
+# Cursor/SSH terminals often omit Docker Desktop's bin dir; pulls then fail with
+# "docker-credential-desktop: executable file not found" when credsStore=desktop.
+if [ "$(uname -s)" = "Darwin" ] && [ -d "/Applications/Docker.app/Contents/Resources/bin" ]; then
+	case ":${PATH}:" in
+	*:/Applications/Docker.app/Contents/Resources/bin:*) ;;
+	*) PATH="/Applications/Docker.app/Contents/Resources/bin:${PATH}" ;;
+	esac
+	export PATH
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 

@@ -20,8 +20,51 @@ import {
 import { isValidGroupFolder } from '../src/group-folder.js';
 import { initGroupFilesystem } from '../src/group-init.js';
 import { log } from '../src/log.js';
+import type { MessagingGroup, MessagingGroupAgent } from '../src/types.js';
 import { resolveSession, writeSessionMessage } from '../src/session-manager.js';
 import { emitStatus } from './status.js';
+
+/**
+ * Maps legacy register flags (--trigger, --no-trigger-required) onto post–engage-mode
+ * schema columns (replaces dropped trigger_rules + response_scope JSON).
+ */
+function wiringEngagement(
+  mg: Pick<MessagingGroup, 'is_group'>,
+  trigger: string,
+  requiresTrigger: boolean,
+): Pick<
+  MessagingGroupAgent,
+  'engage_mode' | 'engage_pattern' | 'sender_scope' | 'ignored_message_policy'
+> {
+  const pattern = trigger.trim();
+  const isDm = mg.is_group === 0;
+
+  if (pattern) {
+    return {
+      engage_mode: 'pattern',
+      engage_pattern: requiresTrigger ? pattern : '.',
+      sender_scope: 'all',
+      ignored_message_policy: 'drop',
+    };
+  }
+
+  // No explicit pattern: DMs behave like init-first-agent (respond to everything).
+  if (isDm || !requiresTrigger) {
+    return {
+      engage_mode: 'pattern',
+      engage_pattern: '.',
+      sender_scope: 'all',
+      ignored_message_policy: 'drop',
+    };
+  }
+
+  return {
+    engage_mode: 'mention',
+    engage_pattern: null,
+    sender_scope: 'all',
+    ignored_message_policy: 'drop',
+  };
+}
 
 interface RegisterArgs {
   /** Platform-specific channel/group ID (Discord channel ID, Slack channel, etc.) */
@@ -160,6 +203,11 @@ export async function run(args: string[]): Promise<void> {
     log.info('Created messaging group', { id: mgId, channel: parsed.channel, platformId: parsed.platformId });
   }
 
+  const sessionModes = ['shared', 'per-thread', 'agent-shared'] as const;
+  const resolvedSessionMode = sessionModes.includes(parsed.sessionMode as (typeof sessionModes)[number])
+    ? (parsed.sessionMode as (typeof sessionModes)[number])
+    : 'shared';
+
   // 3. Wire agent to messaging group — createMessagingGroupAgent auto-creates
   // the companion agent_destinations row so delivery's ACL admits this target.
   let newlyWired = false;
@@ -167,19 +215,13 @@ export async function run(args: string[]): Promise<void> {
   if (!existing) {
     newlyWired = true;
     const mgaId = generateId('mga');
-    const triggerRules = parsed.trigger
-      ? JSON.stringify({
-          pattern: parsed.trigger,
-          requiresTrigger: parsed.requiresTrigger,
-        })
-      : null;
+    const engagement = wiringEngagement(messagingGroup, parsed.trigger, parsed.requiresTrigger);
     createMessagingGroupAgent({
       id: mgaId,
       messaging_group_id: messagingGroup.id,
       agent_group_id: agentGroup.id,
-      trigger_rules: triggerRules,
-      response_scope: 'all',
-      session_mode: parsed.sessionMode,
+      ...engagement,
+      session_mode: resolvedSessionMode,
       priority: 0,
       created_at: new Date().toISOString(),
     });
@@ -192,7 +234,7 @@ export async function run(args: string[]): Promise<void> {
 
   // 4. Send onboarding message — only on first wiring, not re-registration
   if (newlyWired) {
-    const { session } = resolveSession(agentGroup.id, messagingGroup.id, null, parsed.sessionMode as 'shared' | 'per-thread' | 'agent-shared');
+    const { session } = resolveSession(agentGroup.id, messagingGroup.id, null, resolvedSessionMode);
     writeSessionMessage(agentGroup.id, session.id, {
       id: generateId('onboard'),
       kind: 'task',

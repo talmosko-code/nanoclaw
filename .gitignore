@@ -35,6 +35,9 @@ groups/*
 .idea/
 .vscode/
 
+# NanoClaw trunk skill snapshots (local dated copies, not the live container/skills tree)
+container/skills.nanoclaw-trunk.*/
+
 # Skills system (local per-installation state)
 .nanoclaw/
 

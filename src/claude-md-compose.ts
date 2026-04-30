@@ -7,7 +7,7 @@
  *   - optional per-skill fragments (skills that ship `instructions.md`)
  *   - optional per-MCP-server fragments (inline `instructions` field in
  *     `container.json`)
- *   - per-group agent memory (`CLAUDE.local.md`, auto-loaded by Claude Code)
+ *   - per-group memory (`CLAUDE.local.md` + stale-safe host-resolved snapshot fragment)
  *
  * Runs on every spawn from `container-runner.buildMounts()`. Deterministic —
  * same inputs produce the same CLAUDE.md, and stale fragments are pruned.
@@ -31,6 +31,14 @@ const SHARED_MCP_TOOLS_CONTAINER_BASE = '/app/src/mcp-tools';
 // Host-side source paths used to discover fragment sources at compose time.
 // Resolved at call time (process.cwd() = project root) so tests can swap cwd.
 const MCP_TOOLS_HOST_SUBPATH = path.join('container', 'agent-runner', 'src', 'mcp-tools');
+
+/**
+ * Inline snapshot of `CLAUDE.local.md`, read on the host so symlinks to paths outside `groups/<folder>/`
+ * (e.g. `/Users/<you>/nanoclaw-private`) are resolved before spawn. Mounted RO at
+ * `.claude-fragments/<this filename>` inside the agent mount.
+ * Keep basename in sync with `container/agent-runner/src/providers/opencode.ts`.
+ */
+export const CLAUDE_LOCAL_HOST_RESOLVED_FRAGMENT = 'CLAUDE-local.host-resolved.md';
 
 const COMPOSED_HEADER = '<!-- Composed at spawn — do not edit. Edit CLAUDE.local.md for per-group content. -->';
 
@@ -98,6 +106,34 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
         content: mcp.instructions,
       });
     }
+  }
+
+  const localOriginal = path.join(groupDir, 'CLAUDE.local.md');
+  try {
+    const text = fs.readFileSync(localOriginal, 'utf8');
+    if (!text.trim()) {
+      /* empty memory — reconcile will drop stale host-resolved snapshot */
+    } else {
+      let resolvedEscapesMount = false;
+      try {
+        const resolvedAbs = fs.realpathSync(localOriginal);
+        const groupAbsWithSep = `${path.resolve(groupDir)}${path.sep}`;
+        resolvedEscapesMount =
+          !(resolvedAbs === path.resolve(groupDir) || resolvedAbs.startsWith(groupAbsWithSep));
+      } catch {
+        resolvedEscapesMount = true;
+      }
+      if (resolvedEscapesMount) {
+        desired.set(CLAUDE_LOCAL_HOST_RESOLVED_FRAGMENT, {
+          type: 'inline',
+          content:
+            '<!-- Resolved on host at spawn — edit CLAUDE.local.md. Symlinks pointing outside groups/<folder>/ are unusable inside Linux mounts. -->\n\n' +
+            text,
+        });
+      }
+    }
+  } catch {
+    /* missing or unreadable CLAUDE.local.md */
   }
 
   // Reconcile: drop stale, write desired.

@@ -4,6 +4,27 @@
 import { execSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
+import path from 'path';
+
+/** Bundled Docker CLI when Docker Desktop is installed from the official app. */
+const DOCKER_DESKTOP_MAC_CLI =
+  '/Applications/Docker.app/Contents/Resources/bin';
+
+/**
+ * Prepend Docker Desktop's bundled CLI on macOS when that binary exists.
+ * Avoids false "docker not found" when PATH has a stale symlink (e.g. leftover
+ * from an old .dmg path under /usr/local/bin/docker).
+ */
+export function ensureDockerDesktopMacCliOnPath(): void {
+  if (getPlatform() !== 'macos') return;
+  const dockerExe = path.join(DOCKER_DESKTOP_MAC_CLI, 'docker');
+  if (!fs.existsSync(dockerExe)) return;
+
+  const cur = process.env.PATH ?? '';
+  const segments = cur.split(path.delimiter).filter(Boolean);
+  const without = segments.filter((s) => s !== DOCKER_DESKTOP_MAC_CLI);
+  process.env.PATH = [DOCKER_DESKTOP_MAC_CLI, ...without].join(path.delimiter);
+}
 
 export type Platform = 'macos' | 'linux' | 'unknown';
 export type ServiceManager = 'launchd' | 'systemd' | 'none';

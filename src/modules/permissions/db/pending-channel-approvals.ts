@@ -19,10 +19,14 @@ export interface PendingChannelApproval {
   created_at: string;
 }
 
-export function createPendingChannelApproval(row: PendingChannelApproval): void {
-  getDb()
+/**
+ * Inserts a pending row. Returns false if another row with this messaging_group_id
+ * already exists (check-then-insert races between concurrent inbound handlers).
+ */
+export function createPendingChannelApproval(row: PendingChannelApproval): boolean {
+  const info = getDb()
     .prepare(
-      `INSERT INTO pending_channel_approvals (
+      `INSERT OR IGNORE INTO pending_channel_approvals (
          messaging_group_id, agent_group_id, original_message,
          approver_user_id, created_at
        )
@@ -32,6 +36,7 @@ export function createPendingChannelApproval(row: PendingChannelApproval): void 
        )`,
     )
     .run(row);
+  return info.changes > 0;
 }
 
 export function getPendingChannelApproval(messagingGroupId: string): PendingChannelApproval | undefined {

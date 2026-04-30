@@ -99,6 +99,13 @@ async function main(): Promise<void> {
           'Log out and back in (or run `newgrp docker` in a new shell), then retry.',
         );
       }
+      if (err === 'docker_keychain') {
+        await fail(
+          'container',
+          'Docker hit a macOS keychain lock while fetching images.',
+          'Use Terminal.app (or unlock your login keychain), then retry. If you only pull public images, you can remove credsStore from ~/.docker/config.json.',
+        );
+      }
       await fail(
         'container',
         "Couldn't build the sandbox.",
@@ -208,7 +215,7 @@ async function main(): Promise<void> {
       const ping = await confirmAssistantResponds();
       if (ping === 'ok') {
         phEmit('first_chat_ready');
-        await runFirstChat();
+        // await runFirstChat();
       } else {
         phEmit('first_chat_failed', { reason: ping });
         renderPingFailureNote(ping);

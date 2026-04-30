@@ -27,8 +27,8 @@
  *     escalating on this channel until an admin explicitly re-wires
  *   - Delete the pending row
  *
- * Dedup: `pending_channel_approvals` PK on messaging_group_id. Second
- * mention while pending silently dropped.
+ * Dedup: `pending_channel_approvals` PK on messaging_group_id. Concurrent
+ * check-then-insert races resolve via INSERT OR IGNORE; losers skip delivery.
  *
  * Failure modes (log + no row, so a future attempt can try again):
  *   - No agent groups exist (install never set up a first agent).
@@ -109,13 +109,19 @@ export async function requestChannelApproval(input: RequestChannelApprovalInput)
     ? `Your agent was mentioned in ${originName} on ${originChannelType}. Wire it to ${target.name} and let it engage?`
     : `Someone DM'd your agent on ${originChannelType} (${originName}). Wire it to ${target.name} and let it respond?`;
 
-  createPendingChannelApproval({
+  const created = createPendingChannelApproval({
     messaging_group_id: messagingGroupId,
     agent_group_id: target.id,
     original_message: JSON.stringify(event),
     approver_user_id: delivery.userId,
     created_at: new Date().toISOString(),
   });
+  if (!created) {
+    log.debug('Channel registration skipped — pending row already exists (concurrent request)', {
+      messagingGroupId,
+    });
+    return;
+  }
 
   const adapter = getDeliveryAdapter();
   if (!adapter) {

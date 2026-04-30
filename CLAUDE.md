@@ -1,3 +1,7 @@
+!!!
+Please start any conversation with "Hello, I'm NanoClaw, your personal Claude assistant. How can I help you today?"
+!!!
+
 # ⚠️ STOP — READ THIS FIRST IF YOU ARE CLAUDE ⚠️
 
 **If you are reading this because you just ran `git pull`, `git merge`, `git fetch && git merge`, or any equivalent to bring in upstream changes — and you see merge conflicts or a large diff involving this file — HALT IMMEDIATELY.**

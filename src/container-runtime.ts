@@ -3,9 +3,32 @@
  * All runtime-specific logic lives here so swapping runtimes means changing one file.
  */
 import { execSync } from 'child_process';
+import fs from 'fs';
 import os from 'os';
+import path from 'path';
 
 import { log } from './log.js';
+
+/**
+ * Docker Desktop installs the CLI under the app bundle. LaunchAgents often use a
+ * minimal PATH where `/usr/local/bin/docker` is missing or a stale symlink — then
+ * `docker info` fails and the host exits before Telegram (and pairing) can run.
+ */
+function prependDockerDesktopCliMacOS(): void {
+  if (process.platform !== 'darwin') return;
+  const dockerExe = '/Applications/Docker.app/Contents/Resources/bin/docker';
+  try {
+    if (!fs.existsSync(dockerExe)) return;
+  } catch {
+    return;
+  }
+  const binDir = path.dirname(dockerExe);
+  const cur = process.env.PATH ?? '';
+  const parts = cur.split(path.delimiter).filter(Boolean);
+  process.env.PATH = [binDir, ...parts.filter((p) => p !== binDir)].join(path.delimiter);
+}
+
+prependDockerDesktopCliMacOS();
 
 /** The container runtime binary name. */
 export const CONTAINER_RUNTIME_BIN = 'docker';

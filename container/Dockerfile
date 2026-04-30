@@ -1,4 +1,7 @@
-# syntax=docker/dockerfile:1.7
+# Omit `# syntax=docker/dockerfile:…` so BuildKit uses the engine-bundled Dockerfile
+# frontend. Pinning a remote frontend pulls docker.io/docker/dockerfile first; on macOS
+# that can invoke docker-credential-osxkeychain and fail with "keychain cannot be
+# accessed" in SSH/Cursor terminals where the login keychain is not unlockable.
 # NanoClaw Agent Container
 # Runs Claude Agent SDK in isolated Linux VM with browser automation.
 #
@@ -22,6 +25,7 @@ ARG INSTALL_CJK_FONTS=false
 ARG CLAUDE_CODE_VERSION=2.1.116
 ARG AGENT_BROWSER_VERSION=latest
 ARG VERCEL_VERSION=latest
+ARG OPENCODE_VERSION=1.4.17
 ARG BUN_VERSION=1.3.12
 
 # ---- System dependencies -----------------------------------------------------
@@ -103,6 +107,9 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+RUN --mount=type=cache,target=/root/.cache/pnpm \
+    pnpm install -g "opencode-ai@${OPENCODE_VERSION}"
 
 # ---- Entrypoint --------------------------------------------------------------
 COPY entrypoint.sh /app/entrypoint.sh

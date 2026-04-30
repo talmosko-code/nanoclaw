@@ -19,6 +19,7 @@ import { initGroupFilesystem } from './group-init.js';
 import { stopTypingRefresh } from './modules/typing/index.js';
 import { log } from './log.js';
 import { validateAdditionalMounts } from './modules/mount-security/index.js';
+import { readEnvFile } from './env.js';
 // Provider host-side config barrel — each provider that needs host-side
 // container setup self-registers on import.
 import './providers/index.js';
@@ -31,6 +32,34 @@ import { markContainerRunning, markContainerStopped, sessionDir, writeSessionRou
 import type { AgentGroup, Session } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
+
+function coerceNullableProvider(value: string | null | undefined): string | undefined {
+  const v = typeof value === 'string' ? value.trim() : '';
+  return v || undefined;
+}
+
+/**
+ * Resolved agent provider for a session spawn. Session row wins, then DB group,
+ * then NANOCLAW_DEFAULT_AGENT_PROVIDER (process.env or .env), then
+ * groups/<folder>/container.json provider, default claude.
+ */
+function effectiveAgentProvider(
+  session: Session,
+  agentGroup: AgentGroup,
+  containerConfig: import('./container-config.js').ContainerConfig,
+): string {
+  const fileEnv = readEnvFile(['NANOCLAW_DEFAULT_AGENT_PROVIDER']);
+  const fromEnvDefault = coerceNullableProvider(
+    process.env.NANOCLAW_DEFAULT_AGENT_PROVIDER ?? fileEnv.NANOCLAW_DEFAULT_AGENT_PROVIDER,
+  );
+  const pick =
+    coerceNullableProvider(session.agent_provider) ??
+    coerceNullableProvider(agentGroup.agent_provider) ??
+    fromEnvDefault ??
+    coerceNullableProvider(containerConfig.provider) ??
+    'claude';
+  return pick.toLowerCase();
+}
 
 /** Active containers tracked by session ID. */
 const activeContainers = new Map<string, { process: ChildProcess; containerName: string }>();
@@ -98,7 +127,7 @@ async function spawnContainer(session: Session): Promise<void> {
 
   // Ensure container.json has the agent group identity fields the runner needs.
   // Written at spawn time so the runner can read them from the RO mount.
-  ensureRuntimeFields(containerConfig, agentGroup);
+  ensureRuntimeFields(containerConfig, agentGroup, session);
 
   // Resolve the effective provider + any host-side contribution it declares
   // (extra mounts, env passthrough). Computed once and threaded through both
@@ -353,6 +382,7 @@ function syncSkillSymlinks(claudeDir: string, containerConfig: import('./contain
 function ensureRuntimeFields(
   containerConfig: import('./container-config.js').ContainerConfig,
   agentGroup: AgentGroup,
+  session: Session,
 ): void {
   let dirty = false;
   if (containerConfig.agentGroupId !== agentGroup.id) {
@@ -367,6 +397,14 @@ function ensureRuntimeFields(
     containerConfig.assistantName = agentGroup.name;
     dirty = true;
   }
+
+  const eff = effectiveAgentProvider(session, agentGroup, containerConfig);
+  const current = coerceNullableProvider(containerConfig.provider)?.toLowerCase() ?? 'claude';
+  if (current !== eff) {
+    containerConfig.provider = eff;
+    dirty = true;
+  }
+
   if (dirty) {
     writeContainerConfig(agentGroup.folder, containerConfig);
   }

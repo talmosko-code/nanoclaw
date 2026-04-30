@@ -3,6 +3,7 @@
  * Usage: pnpm exec tsx setup/index.ts --step <name> [args...]
  */
 import { log } from '../src/log.js';
+import { ensureDockerDesktopMacCliOnPath } from './platform.js';
 import { emitStatus } from './status.js';
 
 const STEPS: Record<
@@ -14,6 +15,7 @@ const STEPS: Record<
   environment: () => import('./environment.js'),
   container: () => import('./container.js'),
   register: () => import('./register.js'),
+  'pair-telegram': () => import('./pair-telegram.js'),
   groups: () => import('./groups.js'),
   'whatsapp-auth': () => import('./whatsapp-auth.js'),
   mounts: () => import('./mounts.js'),
@@ -25,6 +27,7 @@ const STEPS: Record<
 };
 
 async function main(): Promise<void> {
+  ensureDockerDesktopMacCliOnPath();
   const args = process.argv.slice(2);
   const stepIdx = args.indexOf('--step');
 

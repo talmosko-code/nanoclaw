@@ -12,6 +12,38 @@ import { emitStatus } from './status.js';
 
 type DockerStatus = 'ok' | 'no-permission' | 'no-daemon' | 'other';
 
+function execSyncErrorText(err: unknown): string {
+  if (!err || typeof err !== 'object') return '';
+  const e = err as {
+    stderr?: Buffer;
+    stdout?: Buffer;
+    output?: (Buffer | string | null | undefined)[];
+    message?: string;
+  };
+  const parts: string[] = [];
+  if (e.message) parts.push(e.message);
+  if (Array.isArray(e.output)) {
+    for (const chunk of e.output) {
+      if (chunk == null) continue;
+      parts.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
+    }
+  }
+  if (e.stderr) parts.push(Buffer.isBuffer(e.stderr) ? e.stderr.toString('utf8') : String(e.stderr));
+  if (e.stdout) parts.push(Buffer.isBuffer(e.stdout) ? e.stdout.toString('utf8') : String(e.stdout));
+  return parts.join('\n');
+}
+
+function classifyDockerBuildFailure(logText: string): 'docker_keychain' | 'build_failed' {
+  const t = logText.toLowerCase();
+  if (
+    t.includes('keychain cannot be accessed') ||
+    (t.includes('error getting credentials') && t.includes('keychain'))
+  ) {
+    return 'docker_keychain';
+  }
+  return 'build_failed';
+}
+
 function dockerStatus(): DockerStatus {
   const res = spawnSync('docker', ['info'], { encoding: 'utf-8' });
   if (res.status === 0) return 'ok';
@@ -176,6 +208,7 @@ export async function run(args: string[]): Promise<void> {
 
   // Build
   let buildOk = false;
+  let buildFailure: 'docker_keychain' | 'build_failed' | undefined;
   log.info('Building container', { runtime, buildArgs });
   try {
     const argsStr = buildArgs.length > 0 ? ' ' + buildArgs.join(' ') : '';
@@ -186,7 +219,9 @@ export async function run(args: string[]): Promise<void> {
     buildOk = true;
     log.info('Container build succeeded');
   } catch (err) {
-    log.error('Container build failed', { err });
+    const text = execSyncErrorText(err);
+    buildFailure = classifyDockerBuildFailure(text);
+    log.error('Container build failed', { err, buildFailure });
   }
 
   // Test
@@ -213,6 +248,8 @@ export async function run(args: string[]): Promise<void> {
     BUILD_OK: buildOk,
     TEST_OK: testOk,
     STATUS: status,
+    ...(status === 'failed' && buildFailure ? { ERROR: buildFailure } : {}),
+    ...(status === 'failed' && buildOk && !testOk ? { ERROR: 'container_test_failed' } : {}),
     LOG: 'logs/setup.log',
   });
 
