@@ -13,7 +13,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 
 import { initTestSessionDb, closeSessionDb, getInboundDb } from './db/connection.js';
 import { getPendingMessages } from './db/messages-in.js';
-import { formatMessages, stripInternalTags } from './formatter.js';
+import type { MessageInRow } from './db/messages-in.js';
+import { extractRouting, formatMessages, stripInternalTags } from './formatter.js';
 import { TIMEZONE } from './timezone.js';
 
 beforeEach(() => {
@@ -38,6 +39,67 @@ function insertMessage(
     )
     .run(id, kind, timestamp, JSON.stringify(content));
 }
+
+function fakeRow(base: Partial<MessageInRow> & Pick<MessageInRow, 'id' | 'kind' | 'content'>): MessageInRow {
+  return {
+    seq: 1,
+    timestamp: '2026-01-01T00:00:00.000Z',
+    status: 'pending',
+    process_after: null,
+    recurrence: null,
+    tries: 0,
+    trigger: 1,
+    platform_id: null,
+    channError: OpenCode event timeout (90000ms)el_type: null,
+    thread_id: null,
+    ...base,
+  };
+}
+
+describe('extractRouting', () => {
+  it('prefers chat-sdk over leading agent echoes in the batch', () => {
+    const messages: MessageInRow[] = [
+      fakeRow({
+        id: 'echo1',
+        kind: 'chat',
+        seq: 1,
+        channel_type: 'agent',
+        platform_id: 'ag-self',
+        content: '{"text":"."}',
+      }),
+      fakeRow({
+        id: 'tg-latest',
+        kind: 'chat-sdk',
+        seq: 2,
+        channel_type: 'telegram',
+        platform_id: 'telegram:123',
+        content: '{"text":"hi"}',
+      }),
+    ];
+
+    const r = extractRouting(messages);
+    expect(r.channelType).toBe('telegram');
+    expect(r.platformId).toBe('telegram:123');
+    expect(r.inReplyTo).toBe('tg-latest');
+  });
+
+  it('falls back to batch[0] when only agent echoes exist', () => {
+    const messages: MessageInRow[] = [
+      fakeRow({
+        id: 'echo1',
+        kind: 'chat',
+        seq: 1,
+        channel_type: 'agent',
+        platform_id: 'ag-self',
+        content: '{"text":"."}',
+      }),
+    ];
+    const r = extractRouting(messages);
+    expect(r.channelType).toBe('agent');
+    expect(r.platformId).toBe('ag-self');
+    expect(r.inReplyTo).toBe('echo1');
+  });
+});
 
 describe('context timezone header', () => {
   it('prepends <context timezone="..."/> to formatted output', () => {

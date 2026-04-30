@@ -89,16 +89,50 @@ export interface RoutingContext {
 }
 
 /**
+ * Pick which inbound row determines default reply routing (platform/thread).
+ *
+ * `getPendingMessages()` returns the last N pending rows chronologically — when
+ * the tail is polluted with agent-to-agent self echoes (`kind:'chat'` from
+ * routeAgentMessage), using `messages[0]` wrongly sets routing to channel
+ * type `agent` so scratchpad text is written back to oneself (infinite loop)
+ * instead of the user's Telegram/session channel.
+ *
+ * Prefer real channel traffic (`chat-sdk` from Chat SDK, or non-agent routing).
+ */
+function pickRoutingAnchor(messages: MessageInRow[]): MessageInRow | undefined {
+  const chatSdkFirst = messages.find((m) => m.kind === 'chat-sdk');
+  if (chatSdkFirst) return chatSdkFirst;
+
+  const nonAgent = messages.find((m) => m.channel_type != null && m.channel_type !== 'agent');
+  if (nonAgent) return nonAgent;
+
+  return messages[0];
+}
+
+/** Newest inbound message that represents user/channel traffic — best `in_reply_to` target within the batch. */
+function pickLatestUserAnchor(messages: MessageInRow[]): MessageInRow | undefined {
+  const rev = [...messages].reverse();
+  const sdk = rev.find((m) => m.kind === 'chat-sdk');
+  if (sdk) return sdk;
+
+  const other = rev.find((m) => m.channel_type != null && m.channel_type !== 'agent');
+  if (other) return other;
+
+  return messages[messages.length - 1];
+}
+
+/**
  * Extract routing context from a batch of messages.
- * Uses the first message's routing fields.
+ * Prefers anchors that are not agent self echoes when present.
  */
 export function extractRouting(messages: MessageInRow[]): RoutingContext {
-  const first = messages[0];
+  const anchor = pickRoutingAnchor(messages);
+  const inReplyAnchor = pickLatestUserAnchor(messages) ?? anchor;
   return {
-    platformId: first?.platform_id ?? null,
-    channelType: first?.channel_type ?? null,
-    threadId: first?.thread_id ?? null,
-    inReplyTo: first?.id ?? null,
+    platformId: anchor?.platform_id ?? null,
+    channelType: anchor?.channel_type ?? null,
+    threadId: anchor?.thread_id ?? null,
+    inReplyTo: inReplyAnchor?.id ?? null,
   };
 }
 

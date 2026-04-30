@@ -23,6 +23,25 @@ export function isLegacyUuidOpenCodeSessionId(id: string): boolean {
 const STALE_SESSION_RE =
   /no conversation found|ENOENT.*\.jsonl|session.*not found|NotFoundError|connection reset|ECONNRESET|404|event timeout|invalid_format|must start with.*ses|"prefix"\s*:\s*"ses"/i;
 
+/**
+ * Stall detector: if nothing on the OpenCode SSE stream resets the clock for this long,
+ * assume the server hung. `server.heartbeat` events reset the clock — without that,
+ * MCP-heavy turns can sit silent for minutes and wrongly trip a 90s default.
+ *
+ * Override: `NANOCLAW_OPENCODE_IDLE_TIMEOUT_MS` (30_000–3_600_000), set on the host and
+ * passed through the opencode provider env.
+ */
+function parseOpenCodeIdleTimeoutMs(): number {
+  const raw = process.env.NANOCLAW_OPENCODE_IDLE_TIMEOUT_MS?.trim();
+  const defaultMs = 300_000;
+  if (!raw) return defaultMs;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return defaultMs;
+  return Math.min(Math.max(n, 30_000), 3_600_000);
+}
+
+const OPENCODE_IDLE_TIMEOUT_MS = parseOpenCodeIdleTimeoutMs();
+
 /** Basename must stay aligned with host `CLAUDE_LOCAL_HOST_RESOLVED_FRAGMENT` in `src/claude-md-compose.ts`. */
 const CLAUDE_LOCAL_HOST_RESOLVED_FRAGMENT = 'CLAUDE-local.host-resolved.md';
 
@@ -296,7 +315,7 @@ export class OpenCodeProvider implements AgentProvider {
     };
 
     const self = this;
-    const IDLE_TIMEOUT_MS = 90_000;
+    const idleTimeoutMs = OPENCODE_IDLE_TIMEOUT_MS;
 
     async function* gen(): AsyncGenerator<ProviderEvent> {
       let initYielded = false;
@@ -353,8 +372,8 @@ export class OpenCodeProvider implements AgentProvider {
         let lastEventAt = Date.now();
         let eventTimedOut = false;
         const timeoutCheck = setInterval(() => {
-          if (Date.now() - lastEventAt > IDLE_TIMEOUT_MS) {
-            log(`OpenCode event timeout (${IDLE_TIMEOUT_MS}ms) — clearing session ${sessionId}`);
+          if (Date.now() - lastEventAt > idleTimeoutMs) {
+            log(`OpenCode event timeout (${idleTimeoutMs}ms) — clearing session ${sessionId}`);
             eventTimedOut = true;
             self.activeSessionId = undefined;
             destroySharedRuntime();
@@ -366,7 +385,7 @@ export class OpenCodeProvider implements AgentProvider {
           turn: while (true) {
             if (aborted) return;
             if (eventTimedOut) {
-              throw new Error(`OpenCode event timeout (${IDLE_TIMEOUT_MS}ms)`);
+              throw new Error(`OpenCode event timeout (${idleTimeoutMs}ms)`);
             }
 
             const { value: ev, done } = await stream.next();
@@ -374,7 +393,13 @@ export class OpenCodeProvider implements AgentProvider {
               throw new Error('OpenCode SSE stream ended unexpectedly');
             }
 
-            if (!ev?.type || ev.type === 'server.connected' || ev.type === 'server.heartbeat') continue;
+            if (!ev?.type || ev.type === 'server.connected') continue;
+
+            // Treat heartbeats as liveness only (no activity yield — avoids idle host logic).
+            if (ev.type === 'server.heartbeat') {
+              lastEventAt = Date.now();
+              continue;
+            }
 
             lastEventAt = Date.now();
             yield { type: 'activity' };
