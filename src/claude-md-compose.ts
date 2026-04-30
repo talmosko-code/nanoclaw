@@ -118,8 +118,7 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
       try {
         const resolvedAbs = fs.realpathSync(localOriginal);
         const groupAbsWithSep = `${path.resolve(groupDir)}${path.sep}`;
-        resolvedEscapesMount =
-          !(resolvedAbs === path.resolve(groupDir) || resolvedAbs.startsWith(groupAbsWithSep));
+        resolvedEscapesMount = !(resolvedAbs === path.resolve(groupDir) || resolvedAbs.startsWith(groupAbsWithSep));
       } catch {
         resolvedEscapesMount = true;
       }

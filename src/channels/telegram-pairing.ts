@@ -164,9 +164,7 @@ export function extractAddressedText(text: string, botUsername: string): string 
 function normalizePairingPlaintext(s: string): string {
   return s
     .replace(/[\u200B-\u200D\uFEFF]/g, '')
-    .replace(/[\uFF10-\uFF19]/g, (ch) =>
-      String.fromCharCode(ch.charCodeAt(0) - 0xff10 + 0x30),
-    );
+    .replace(/[\uFF10-\uFF19]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xff10 + 0x30));
 }
 
 /**
