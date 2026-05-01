@@ -26,10 +26,7 @@ const OPENCODE_OPTIONAL_HOST_ENV_KEYS = ['NANOCLAW_OPENCODE_IDLE_TIMEOUT_MS'] as
 
 /** process.env overrides .env (for launchd/systemd injections). */
 function resolveOpencodeHostEnv(processEnv: NodeJS.ProcessEnv): Record<string, string> {
-  const fileEnv = readEnvFile([
-    ...OPENCODE_HOST_ENV_KEYS,
-    ...OPENCODE_OPTIONAL_HOST_ENV_KEYS,
-  ]);
+  const fileEnv = readEnvFile([...OPENCODE_HOST_ENV_KEYS, ...OPENCODE_OPTIONAL_HOST_ENV_KEYS]);
   const out: Record<string, string> = {};
   for (const key of OPENCODE_HOST_ENV_KEYS) {
     const raw = processEnv[key]?.trim() || fileEnv[key];

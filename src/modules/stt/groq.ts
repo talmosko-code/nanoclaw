@@ -1,6 +1,6 @@
 /**
  * Groq Whisper STT (Speech-to-Text) for NanoClaw.
- * 
+ *
  * Transcribes voice/audio messages using Groq's Whisper API.
  * Groq Free Tier: 30 RPS (requests per second) - plenty for voice notes.
  */
@@ -27,7 +27,7 @@ export interface GroqSttConfig {
 export async function transcribeAudio(
   audioBuffer: Buffer,
   mimeType: string,
-  config: GroqSttConfig
+  config: GroqSttConfig,
 ): Promise<TranscriptionResult> {
   const { model = DEFAULT_MODEL, language } = config;
   const apiKey = GROQ_API_KEY;
@@ -36,7 +36,7 @@ export async function transcribeAudio(
     throw new Error('GROQ_API_KEY not set in environment');
   }
 
-  // Determine file extension from mime type  
+  // Determine file extension from mime type
   const extension = mimeTypeToExtension(mimeType);
   const filename = `audio.${extension}`;
 
@@ -44,22 +44,22 @@ export async function transcribeAudio(
   const formData = new FormData();
   formData.append('file', new Blob([new Uint8Array(audioBuffer)], { type: mimeType }), filename);
   formData.append('model', model);
-  
+
   if (language && language !== 'auto') {
     formData.append('language', language);
   }
 
-  log.info('Sending audio to Groq Whisper API', { 
-    size: audioBuffer.length, 
-    mimeType, 
+  log.info('Sending audio to Groq Whisper API', {
+    size: audioBuffer.length,
+    mimeType,
     model,
-    language: language || 'auto'
+    language: language || 'auto',
   });
 
   const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: formData,
   });
@@ -70,16 +70,16 @@ export async function transcribeAudio(
     throw new Error(`Groq STT failed: ${response.status} ${errorText}`);
   }
 
-  const result = await response.json() as {
+  const result = (await response.json()) as {
     text: string;
     language?: string;
     duration?: number;
   };
 
-  log.info('Groq STT success', { 
+  log.info('Groq STT success', {
     textLength: result.text?.length || 0,
     language: result.language,
-    duration: result.duration
+    duration: result.duration,
   });
 
   return {
@@ -103,7 +103,7 @@ export function isTranscribableAudio(mimeType: string): boolean {
     'audio/flac',
     'audio/x-m4a',
   ];
-  return audioTypes.some(type => mimeType.startsWith(type));
+  return audioTypes.some((type) => mimeType.startsWith(type));
 }
 
 /**
@@ -120,11 +120,11 @@ function mimeTypeToExtension(mimeType: string): string {
     'audio/flac': 'flac',
     'audio/x-m4a': 'm4a',
   };
-  
+
   for (const [type, ext] of Object.entries(map)) {
     if (mimeType.startsWith(type)) return ext;
   }
-  
+
   return 'bin';
 }
 
@@ -135,7 +135,7 @@ function mimeTypeToExtension(mimeType: string): string {
 export async function getGroqGatewayUrl(): Promise<string | null> {
   const ONECLI_URL = process.env.ONECLI_URL || 'http://127.0.0.1:10254';
   const gatewayUrl = ONECLI_URL.replace(':10254', ':10255');
-  
+
   // Verify gateway is reachable
   try {
     const res = await fetch(gatewayUrl, { method: 'HEAD', signal: AbortSignal.timeout(3000) });
@@ -147,6 +147,6 @@ export async function getGroqGatewayUrl(): Promise<string | null> {
     log.warn('OneCLI gateway not reachable', { gatewayUrl });
     return null;
   }
-  
+
   return gatewayUrl;
 }
