@@ -35,13 +35,7 @@ import { readEnvFile } from '../env.js';
 import { log } from '../log.js';
 import { registerChannelAdapter } from './channel-registry.js';
 import { normalizeOptions, type NormalizedOption } from './ask-question.js';
-import type {
-  ChannelAdapter,
-  ChannelSetup,
-  ConversationInfo,
-  InboundMessage,
-  OutboundMessage,
-} from './adapter.js';
+import type { ChannelAdapter, ChannelSetup, ConversationInfo, InboundMessage, OutboundMessage } from './adapter.js';
 
 // Baileys v6 bug: getPlatformId sends charCode (49) instead of enum value (1).
 // Fixed in Baileys 7.x but not backported. Without this, pairing codes fail with
@@ -553,10 +547,10 @@ registerChannelAdapter('whatsapp', {
               const viaUsync = await resolveLidViaUsync(sock, chatJid);
               if (viaUsync) chatJid = viaUsync;
               else {
-                log.warn(
-                  'WhatsApp inbound DM still @lid after USync — host router will not match phone JID wiring',
-                  { rawJid, chatJid },
-                );
+                log.warn('WhatsApp inbound DM still @lid after USync — host router will not match phone JID wiring', {
+                  rawJid,
+                  chatJid,
+                });
               }
             }
 
