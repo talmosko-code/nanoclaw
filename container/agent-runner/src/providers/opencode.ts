@@ -204,6 +204,7 @@ function buildOpenCodeConfig(options: ProviderOptions): Record<string, unknown> 
 }
 
 type SharedRuntime = {
+  baseUrl: string;
   proc: ChildProcess;
   client: OpencodeClient;
   stream: AsyncGenerator<{ type: string; properties: Record<string, unknown> }, void, void>;
@@ -239,6 +240,7 @@ async function ensureSharedRuntime(options: ProviderOptions): Promise<SharedRunt
     const sub = await client.event.subscribe();
     const stream = sub.stream as AsyncGenerator<{ type: string; properties: Record<string, unknown> }, void, void>;
     sharedRuntime = {
+      baseUrl: url,
       proc,
       client,
       stream,
@@ -278,6 +280,34 @@ function sessionErrorMessage(props: { error?: unknown }): string {
     return err.data.message;
   }
   return JSON.stringify(props.error) || 'OpenCode session error';
+}
+
+type OpenCodeQuestionAskedPayload = {
+  id: string;
+  sessionID: string;
+  questions: Array<{ options?: Array<{ label: string }> }>;
+};
+
+/**
+ * Headless NanoClaw has no OpenCode TUI — if the assistant asks multi-choice permission
+ * questions (e.g. doom_loop / tool policy), turns stall until replied. Mimic "approve
+ * conservative default": first listed option per question.
+ */
+async function autoReplyOpenCodeQuestion(baseUrl: string, payload: OpenCodeQuestionAskedPayload): Promise<void> {
+  const trimmed = baseUrl.replace(/\/$/, '');
+  const answers = payload.questions.map((q) => {
+    const first = q.options?.[0]?.label;
+    return first ? [first] : ['Continue'];
+  });
+  const res = await fetch(`${trimmed}/question/${encodeURIComponent(payload.id)}/reply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answers }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`OpenCode question reply failed: ${res.status} ${body}`);
+  }
 }
 
 export class OpenCodeProvider implements AgentProvider {
@@ -320,7 +350,7 @@ export class OpenCodeProvider implements AgentProvider {
     async function* gen(): AsyncGenerator<ProviderEvent> {
       let initYielded = false;
       const rt = await ensureSharedRuntime(self.options);
-      const { client, stream } = rt;
+      const { client, stream, baseUrl } = rt;
 
       while (!aborted) {
         while (pending.length === 0 && !ended && !aborted) {
@@ -429,6 +459,17 @@ export class OpenCodeProvider implements AgentProvider {
                     });
                   } catch (err) {
                     log(`Failed to auto-reply permission: ${err instanceof Error ? err.message : String(err)}`);
+                  }
+                }
+                break;
+              }
+              case 'question.asked': {
+                const qprops = ev.properties as Partial<OpenCodeQuestionAskedPayload>;
+                if (qprops.sessionID === sessionId && qprops.id && Array.isArray(qprops.questions) && qprops.questions.length > 0) {
+                  try {
+                    await autoReplyOpenCodeQuestion(baseUrl, qprops as OpenCodeQuestionAskedPayload);
+                  } catch (err) {
+                    log(`Failed to auto-reply OpenCode question: ${err instanceof Error ? err.message : String(err)}`);
                   }
                 }
                 break;
