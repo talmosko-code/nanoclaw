@@ -21,6 +21,7 @@ import { SqliteStateAdapter } from '../state-sqlite.js';
 import { registerWebhookAdapter } from '../webhook-server.js';
 import { getAskQuestionRender } from '../db/sessions.js';
 import { normalizeOptions, type NormalizedOption } from './ask-question.js';
+import { isTranscribableAudio } from '../modules/stt/groq.js';
 import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
 
 /** Adapter with optional gateway support (e.g., Discord). */
@@ -133,6 +134,36 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         enriched.push(entry);
       }
       serialized.attachments = enriched;
+
+      // Transcribe voice/audio attachments using Groq STT
+      if (!serialized.text) {
+        for (let i = 0; i < enriched.length; i++) {
+          const att = enriched[i];
+          if (att.data && isTranscribableAudio(att.mimeType || '')) {
+            try {
+              const buffer = Buffer.from(att.data, 'base64');
+              const { transcribeAudio } = await import('../modules/stt/groq.js');
+              const result = await transcribeAudio(buffer, att.mimeType || 'audio/ogg', {
+                model: 'whisper-large-v3',
+                language: 'he', // Hebrew priority, Groq auto-detects otherwise
+              });
+              if (result.text) {
+                serialized.text = result.text;
+                log.info('Voice message transcribed via Groq', {
+                  text: result.text.slice(0, 100),
+                  language: result.language,
+                });
+                // Remove audio attachment so container doesn't try to transcribe locally
+                enriched.splice(i, 1);
+                log.info('Removed audio attachment after transcription');
+              }
+            } catch (err) {
+              log.error('STT transcription failed', { err });
+            }
+            break; // Only transcribe the first audio attachment
+          }
+        }
+      }
     }
 
     // Extract reply context via platform-specific hook
