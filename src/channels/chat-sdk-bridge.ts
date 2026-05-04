@@ -21,7 +21,11 @@ import { SqliteStateAdapter } from '../state-sqlite.js';
 import { registerWebhookAdapter } from '../webhook-server.js';
 import { getAskQuestionRender } from '../db/sessions.js';
 import { normalizeOptions, type NormalizedOption } from './ask-question.js';
-import { isTranscribableAudio } from '../modules/stt/groq.js';
+import {
+  resolveTranscribableMime,
+  shouldRunGroqSttOnAttachment,
+  transcribeAudio,
+} from '../modules/stt/groq.js';
 import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
 
 /** Adapter with optional gateway support (e.g., Discord). */
@@ -110,6 +114,33 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const serialized = message.toJSON() as Record<string, any>;
 
+    // @chat-adapter/telegram never adds video_note to attachments — only voice/audio/document/video.
+    // Synthesize one so Groq STT can run on round video messages.
+    if (adapter.name === 'telegram' && message.raw && typeof message.raw === 'object' && !Array.isArray(message.raw)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const raw = message.raw as Record<string, any>;
+      const vn = raw.video_note as { file_id?: string; mime_type?: string } | undefined;
+      if (vn?.file_id) {
+        const msgMarked = message as ChatMessage & { _nanoclawVideoNoteInjected?: boolean };
+        if (!msgMarked._nanoclawVideoNoteInjected) {
+          const telegramDl = adapter as unknown as { downloadFile?: (fileId: string) => Promise<Buffer> };
+          if (telegramDl.downloadFile) {
+            const downloadFile = telegramDl.downloadFile.bind(adapter);
+            const fileId = vn.file_id;
+            const list = message.attachments ? [...message.attachments] : [];
+            list.push({
+              type: 'audio',
+              mimeType: typeof vn.mime_type === 'string' ? vn.mime_type : 'video/mp4',
+              fetchData: () => downloadFile(fileId),
+            } as unknown as ChatMessage['attachments'][number]);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (message as any).attachments = list;
+            msgMarked._nanoclawVideoNoteInjected = true;
+          }
+        }
+      }
+    }
+
     // Download attachment data before serialization loses fetchData()
     if (message.attachments && message.attachments.length > 0) {
       const enriched = [];
@@ -135,34 +166,40 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       }
       serialized.attachments = enriched;
 
-      // Transcribe voice/audio attachments using Groq STT
-      if (!serialized.text) {
-        for (let i = 0; i < enriched.length; i++) {
-          const att = enriched[i];
-          if (att.data && isTranscribableAudio(att.mimeType || '')) {
-            try {
-              const buffer = Buffer.from(att.data, 'base64');
-              const { transcribeAudio } = await import('../modules/stt/groq.js');
-              const result = await transcribeAudio(buffer, att.mimeType || 'audio/ogg', {
-                model: 'whisper-large-v3',
-                language: 'he', // Hebrew priority, Groq auto-detects otherwise
-              });
-              if (result.text) {
-                serialized.text = result.text;
-                log.info('Voice message transcribed via Groq', {
-                  text: result.text.slice(0, 100),
-                  language: result.language,
-                });
-                // Remove audio attachment so container doesn't try to transcribe locally
-                enriched.splice(i, 1);
-                log.info('Removed audio attachment after transcription');
-              }
-            } catch (err) {
-              log.error('STT transcription failed', { err });
-            }
-            break; // Only transcribe the first audio attachment
+      // Groq STT: voice / audio / Telegram video_note. Runs even if text is non-empty (caption + voice).
+      let didTranscribe = false;
+      for (let i = 0; i < enriched.length; i++) {
+        const att = enriched[i];
+        const mime = resolveTranscribableMime(
+          typeof att.mimeType === 'string' ? att.mimeType : undefined,
+          {
+            type: typeof att.type === 'string' ? att.type : undefined,
+            name: typeof att.name === 'string' ? att.name : undefined,
+          },
+        );
+        if (!att.data || !mime || !shouldRunGroqSttOnAttachment(att, mime)) continue;
+
+        try {
+          const buffer = Buffer.from(att.data as string, 'base64');
+          const result = await transcribeAudio(buffer, mime, {
+            model: 'whisper-large-v3',
+            language: 'he', // Hebrew hint; Groq auto-detects when wrong
+          });
+          const piece = result.text?.trim();
+          if (piece) {
+            const prev = String(serialized.text ?? '').trim();
+            serialized.text = prev ? `${prev}\n\n${piece}` : piece;
+            enriched.splice(i, 1);
+            log.info('Voice message transcribed via Groq', {
+              text: piece.slice(0, 100),
+              language: result.language,
+            });
+            didTranscribe = true;
           }
+        } catch (err) {
+          log.error('STT transcription failed', { err });
         }
+        if (didTranscribe) break;
       }
     }
 

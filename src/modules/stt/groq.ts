@@ -102,8 +102,54 @@ export function isTranscribableAudio(mimeType: string): boolean {
     'audio/aac',
     'audio/flac',
     'audio/x-m4a',
+    'audio/opus',
+    // Telegram video notes / some voice payloads arrive as short MP4/WebM
+    'video/mp4',
+    'video/webm',
+    // Occasionally labeled as application/*
+    'application/ogg',
   ];
   return audioTypes.some((type) => mimeType.startsWith(type));
+}
+
+/**
+ * Resolve a MIME type suitable for Groq Whisper when the adapter omits or
+ * narrows `mimeType` (common for Telegram voice attachments).
+ */
+export function resolveTranscribableMime(
+  mimeType: string | undefined,
+  att?: { type?: string; name?: string },
+): string | null {
+  if (mimeType) {
+    const m = mimeType.split(';')[0].trim().toLowerCase();
+    if (isTranscribableAudio(m)) return m;
+  }
+  const type = att?.type?.toLowerCase() ?? '';
+  if (type === 'audio' || type === 'voice') {
+    return 'audio/ogg';
+  }
+  if (type === 'video_note') {
+    return 'video/mp4';
+  }
+  const name = (att?.name ?? '').toLowerCase();
+  if (name.endsWith('.ogg') || name.endsWith('.oga')) return 'audio/ogg';
+  if (name.endsWith('.opus')) return 'audio/ogg';
+  if (name.endsWith('.mp3')) return 'audio/mpeg';
+  if (name.endsWith('.m4a')) return 'audio/mp4';
+  if (name.endsWith('.wav')) return 'audio/wav';
+  if (name.endsWith('.webm')) return 'audio/webm';
+  if (name.endsWith('.mp4')) return 'video/mp4';
+  return null;
+}
+
+/**
+ * Groq STT is for voice / audio / video notes — not full video messages (type `video`).
+ */
+export function shouldRunGroqSttOnAttachment(att: { type?: string }, resolvedMime: string): boolean {
+  const kind = (att.type ?? '').toLowerCase();
+  if (kind === 'video' || kind === 'image') return false;
+  const m = resolvedMime.split(';')[0].trim().toLowerCase();
+  return isTranscribableAudio(m);
 }
 
 /**
@@ -119,6 +165,10 @@ function mimeTypeToExtension(mimeType: string): string {
     'audio/aac': 'aac',
     'audio/flac': 'flac',
     'audio/x-m4a': 'm4a',
+    'audio/opus': 'ogg',
+    'video/mp4': 'mp4',
+    'video/webm': 'webm',
+    'application/ogg': 'ogg',
   };
 
   for (const [type, ext] of Object.entries(map)) {

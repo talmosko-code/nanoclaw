@@ -31,6 +31,7 @@ import {
 import type { GroupMetadata, WAMessageKey, WAMessage, WASocket } from '@whiskeysockets/baileys';
 
 import { ASSISTANT_HAS_OWN_NUMBER, ASSISTANT_NAME, DATA_DIR } from '../config.js';
+import { resolveTranscribableMime, transcribeAudio } from '../modules/stt/groq.js';
 import { readEnvFile } from '../env.js';
 import { log } from '../log.js';
 import { registerChannelAdapter } from './channel-registry.js';
@@ -141,6 +142,7 @@ function formatWhatsApp(text: string): string {
   const segments = splitProtectedRegions(text);
   return segments.map(({ content, isProtected }) => (isProtected ? content : transformForWhatsApp(content))).join('');
 }
+
 
 /** Map file extension to Baileys media message type. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -268,6 +270,12 @@ registerChannelAdapter('whatsapp', {
       }
     }
 
+    /**
+     * Cached group metadata for Baileys `cachedGroupMetadata` only.
+     * Do not rewrite `participants[].id` (LID ↔ phone): Signal session + sender-key fanout
+     * must use the same ids WhatsApp returns from `groupMetadata`, or group sends fail with
+     * SessionError / "No sessions" while DMs still work.
+     */
     async function getNormalizedGroupMetadata(jid: string): Promise<GroupMetadata | undefined> {
       if (!jid.endsWith('@g.us')) return undefined;
 
@@ -325,6 +333,58 @@ registerChannelAdapter('whatsapp', {
       } finally {
         flushing = false;
       }
+    }
+
+    /** Groq STT for native WhatsApp voice notes (Chat SDK bridge already transcribes there). */
+    async function transcribeFirstWhatsAppAudioAttachment(
+      attachments: Array<{ type: string; name: string; localPath: string }>,
+      waMimeHint: string | undefined,
+    ): Promise<{ attachments: typeof attachments; transcript: string }> {
+      const out = [...attachments];
+      let transcript = '';
+
+      for (let i = 0; i < out.length; i++) {
+        if (out[i].type !== 'audio') continue;
+        const fullPath = path.join(DATA_DIR, out[i].localPath);
+        let buffer: Buffer;
+        try {
+          buffer = fs.readFileSync(fullPath);
+        } catch (err) {
+          log.warn('WhatsApp STT: could not read audio file', { path: fullPath, err });
+          continue;
+        }
+
+        const mime = resolveTranscribableMime(waMimeHint, { type: 'audio', name: out[i].name });
+        if (!mime) {
+          log.debug('WhatsApp STT: could not resolve MIME', { waMimeHint, name: out[i].name });
+          continue;
+        }
+
+        try {
+          const result = await transcribeAudio(buffer, mime, {
+            model: 'whisper-large-v3',
+            language: 'he',
+          });
+          if (result.text?.trim()) {
+            transcript = result.text.trim();
+            try {
+              fs.unlinkSync(fullPath);
+            } catch {
+              /* keep file if unlink fails */
+            }
+            out.splice(i, 1);
+            log.info('WhatsApp voice transcribed via Groq', {
+              language: result.language,
+              preview: transcript.slice(0, 80),
+            });
+          }
+        } catch (err) {
+          log.error('WhatsApp STT failed', { err });
+        }
+        break;
+      }
+
+      return { attachments: out, transcript };
     }
 
     /** Download media from an inbound message, save to /workspace/attachments/. */
@@ -567,13 +627,34 @@ registerChannelAdapter('whatsapp', {
               normalized.videoMessage?.caption ||
               '';
 
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const audioMsg = normalized.audioMessage as any;
+            const audioCaption =
+              typeof audioMsg?.caption === 'string' ? String(audioMsg.caption).trim() : '';
+            if (audioCaption) {
+              content = content ? `${content}\n${audioCaption}` : audioCaption;
+            }
+
             // Normalize bot LID mention → assistant name for trigger matching
             if (botLidUser && content.includes(`@${botLidUser}`)) {
               content = content.replace(`@${botLidUser}`, `@${ASSISTANT_NAME}`);
             }
 
             // Download media attachments (images, video, audio, documents)
-            const attachments = await downloadInboundMedia(msg, normalized);
+            let attachments = await downloadInboundMedia(msg, normalized);
+
+            if (!String(content).trim()) {
+              const stt = await transcribeFirstWhatsAppAudioAttachment(
+                attachments,
+                typeof normalized.audioMessage?.mimetype === 'string'
+                  ? normalized.audioMessage.mimetype
+                  : undefined,
+              );
+              attachments = stt.attachments;
+              if (stt.transcript) {
+                content = stt.transcript;
+              }
+            }
 
             // Skip empty protocol messages (no text and no attachments)
             if (!content && attachments.length === 0) continue;

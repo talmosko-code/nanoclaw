@@ -2,9 +2,14 @@
  * Step: whatsapp-auth — standalone WhatsApp authentication.
  *
  * Supports three methods:
- *   --method qr-browser    Opens a local HTTP server with a large scannable QR code
+ *   --method qr-browser    HTTP server with a large scannable QR (default bind 127.0.0.1:9437)
  *   --method qr-terminal   Prints QR code in the terminal
  *   --method pairing-code  Requests a pairing code (requires --phone <number>)
+ *
+ * QR browser bind (SSH / dev containers / Cursor port forwarding):
+ *   --qr-port <port>       Default 9437
+ *   --qr-host <addr>       Default 127.0.0.1; use 0.0.0.0 so the port appears in Cursor’s “Ports”
+ *                          tab (only on trusted networks — or rely on ssh -L 9437:127.0.0.1:9437).
  *
  * On success, credentials are saved to store/auth/ and the process exits.
  */
@@ -44,9 +49,16 @@ try {
 
 type AuthMethod = 'qr-browser' | 'qr-terminal' | 'pairing-code';
 
-function parseArgs(args: string[]): { method: AuthMethod; phone?: string } {
+function parseArgs(args: string[]): {
+  method: AuthMethod;
+  phone?: string;
+  qrPort: number;
+  qrHost: string;
+} {
   let method: AuthMethod = 'qr-terminal';
   let phone: string | undefined;
+  let qrPort = 9437;
+  let qrHost = '127.0.0.1';
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -56,6 +68,16 @@ function parseArgs(args: string[]): { method: AuthMethod; phone?: string } {
       case '--phone':
         phone = args[++i];
         break;
+      case '--qr-port':
+        qrPort = Number.parseInt(args[++i] ?? '', 10);
+        if (!Number.isFinite(qrPort) || qrPort < 1 || qrPort > 65535) {
+          console.error('--qr-port must be a valid TCP port (1–65535)');
+          process.exit(1);
+        }
+        break;
+      case '--qr-host':
+        qrHost = args[++i] ?? '127.0.0.1';
+        break;
     }
   }
 
@@ -64,14 +86,15 @@ function parseArgs(args: string[]): { method: AuthMethod; phone?: string } {
     process.exit(1);
   }
 
-  return { method, phone };
+  return { method, phone, qrPort, qrHost };
 }
 
 /** Serve a web page with a large QR code. Returns cleanup function. */
-function startQrServer(port: number): {
+function startQrServer(port: number, host: string): {
   updateQr: (qr: string) => void;
   close: () => void;
   url: string;
+  listenDisplay: string;
 } {
   let currentQr = '';
   let waitingClients: Array<http.ServerResponse> = [];
@@ -146,7 +169,11 @@ function startQrServer(port: number): {
 </html>`);
   });
 
-  server.listen(port, '127.0.0.1');
+  server.listen(port, host);
+
+  // URL to open in *your* browser: use localhost when the server is exposed
+  // on all interfaces (SSH / Cursor port-forward from remote).
+  const urlHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
 
   return {
     updateQr(qr: string) {
@@ -160,12 +187,13 @@ function startQrServer(port: number): {
     close() {
       server.close();
     },
-    url: `http://127.0.0.1:${port}`,
+    url: `http://${urlHost}:${port}`,
+    listenDisplay: `${host}:${port}`,
   };
 }
 
 export async function run(args: string[]): Promise<void> {
-  const { method, phone } = parseArgs(args);
+  const { method, phone, qrPort, qrHost } = parseArgs(args);
 
   const credsPath = path.join(AUTH_DIR, 'creds.json');
   if (fs.existsSync(credsPath)) {
@@ -192,16 +220,29 @@ export async function run(args: string[]): Promise<void> {
 
   let qrServer: ReturnType<typeof startQrServer> | undefined;
   if (method === 'qr-browser') {
-    qrServer = startQrServer(9437);
+    if (qrHost === '0.0.0.0' || qrHost === '::') {
+      console.error(
+        '\nWhatsApp QR server listening on all interfaces (use only with SSH tunnel or trusted network).\n',
+      );
+    }
+    qrServer = startQrServer(qrPort, qrHost);
 
     emitStatus('WHATSAPP_AUTH', {
       STATUS: 'qr-browser-started',
       URL: qrServer.url,
+      LISTEN: qrServer.listenDisplay,
     });
-    // Try to open browser
-    const { exec } = await import('child_process');
-    const openCmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
-    exec(`${openCmd} ${qrServer.url}`);
+    console.error(
+      `\nOpen this URL in the browser on YOUR machine (after port-forward if SSH): ${qrServer.url}\n` +
+        `Server bind: ${qrServer.listenDisplay}\n` +
+        `SSH example: ssh -L ${qrPort}:127.0.0.1:${qrPort} user@host\n`,
+    );
+    // Try to open a browser only when likely local (same machine as display)
+    if (qrHost === '127.0.0.1' || qrHost === '::1') {
+      const { exec } = await import('child_process');
+      const openCmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+      exec(`${openCmd} ${qrServer.url}`);
+    }
   }
 
   return new Promise<void>((resolve) => {
