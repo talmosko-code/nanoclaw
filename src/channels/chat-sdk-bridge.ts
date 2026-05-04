@@ -21,11 +21,7 @@ import { SqliteStateAdapter } from '../state-sqlite.js';
 import { registerWebhookAdapter } from '../webhook-server.js';
 import { getAskQuestionRender } from '../db/sessions.js';
 import { normalizeOptions, type NormalizedOption } from './ask-question.js';
-import {
-  resolveTranscribableMime,
-  shouldRunGroqSttOnAttachment,
-  transcribeAudio,
-} from '../modules/stt/groq.js';
+import { resolveTranscribableMime, shouldRunGroqSttOnAttachment, transcribeAudio } from '../modules/stt/groq.js';
 import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
 
 /** Adapter with optional gateway support (e.g., Discord). */
@@ -170,13 +166,10 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       let didTranscribe = false;
       for (let i = 0; i < enriched.length; i++) {
         const att = enriched[i];
-        const mime = resolveTranscribableMime(
-          typeof att.mimeType === 'string' ? att.mimeType : undefined,
-          {
-            type: typeof att.type === 'string' ? att.type : undefined,
-            name: typeof att.name === 'string' ? att.name : undefined,
-          },
-        );
+        const mime = resolveTranscribableMime(typeof att.mimeType === 'string' ? att.mimeType : undefined, {
+          type: typeof att.type === 'string' ? att.type : undefined,
+          name: typeof att.name === 'string' ? att.name : undefined,
+        });
         if (!att.data || !mime || !shouldRunGroqSttOnAttachment(att, mime)) continue;
 
         try {

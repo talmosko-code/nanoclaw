@@ -143,7 +143,6 @@ function formatWhatsApp(text: string): string {
   return segments.map(({ content, isProtected }) => (isProtected ? content : transformForWhatsApp(content))).join('');
 }
 
-
 /** Map file extension to Baileys media message type. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildMediaMessage(data: Buffer, filename: string, ext: string, caption?: string): any {
@@ -629,8 +628,7 @@ registerChannelAdapter('whatsapp', {
 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const audioMsg = normalized.audioMessage as any;
-            const audioCaption =
-              typeof audioMsg?.caption === 'string' ? String(audioMsg.caption).trim() : '';
+            const audioCaption = typeof audioMsg?.caption === 'string' ? String(audioMsg.caption).trim() : '';
             if (audioCaption) {
               content = content ? `${content}\n${audioCaption}` : audioCaption;
             }
@@ -643,16 +641,19 @@ registerChannelAdapter('whatsapp', {
             // Download media attachments (images, video, audio, documents)
             let attachments = await downloadInboundMedia(msg, normalized);
 
-            if (!String(content).trim()) {
+            // Always transcribe the first voice attachment when present — not only when
+            // `content` is empty. Captions / concurrent image captions skip transcription
+            // otherwise, leaving host-local paths (`data/attachments/`) that the container's
+            // `/workspace` mount cannot see (see docs/session mounts vs formatter paths).
+            if (attachments.some((a) => a.type === 'audio')) {
               const stt = await transcribeFirstWhatsAppAudioAttachment(
                 attachments,
-                typeof normalized.audioMessage?.mimetype === 'string'
-                  ? normalized.audioMessage.mimetype
-                  : undefined,
+                typeof normalized.audioMessage?.mimetype === 'string' ? normalized.audioMessage.mimetype : undefined,
               );
               attachments = stt.attachments;
               if (stt.transcript) {
-                content = stt.transcript;
+                const prev = String(content ?? '').trim();
+                content = prev ? `${prev}\n\n${stt.transcript}` : stt.transcript;
               }
             }
 
