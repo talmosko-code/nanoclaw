@@ -137,19 +137,25 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
     }
 
     // Download attachment data before serialization loses fetchData()
-    if (message.attachments && message.attachments.length > 0) {
-      const enriched = [];
-      for (const att of message.attachments) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const entry: Record<string, any> = {
+    const attsFromSerialized = (serialized.attachments as Array<Record<string, unknown>> | undefined) ?? [];
+    if (attsFromSerialized.length > 0) {
+      const enriched: Array<Record<string, unknown>> = [];
+      for (const att of attsFromSerialized) {
+        const entry: Record<string, unknown> = {
           type: att.type,
           name: att.name,
           mimeType: att.mimeType,
           size: att.size,
-          width: (att as unknown as Record<string, unknown>).width,
-          height: (att as unknown as Record<string, unknown>).height,
+          width: (att as Record<string, unknown>).width,
+          height: (att as Record<string, unknown>).height,
         };
-        if (att.fetchData) {
+        // fetchData is lost after serialization — the original message object
+        // still carries it via a getter. Use the pre-serialization attachment
+        // objects from the raw message to call fetchData and download the data.
+        const rawAtt = (message.attachments ?? [])[
+          attsFromSerialized.indexOf(att)
+        ];
+        if (rawAtt?.fetchData) {
           // Retry audio downloads with exponential backoff so transient
           // 502 / NetworkErrors don't silently drop voice data.
           // Non-audio attachments keep original single-attempt behavior.
@@ -162,7 +168,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
               await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt - 2)));
             }
             try {
-              const buffer = await att.fetchData();
+              const buffer = await rawAtt.fetchData();
               entry.data = buffer.toString('base64');
               lastErr = undefined;
               break;

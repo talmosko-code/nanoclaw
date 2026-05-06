@@ -384,9 +384,7 @@ registerChannelAdapter('whatsapp', {
     async function downloadInboundMedia(
       msg: WAMessage,
       normalized: any,
-    ): Promise<
-      Array<{ type: string; name: string; localPath: string; data?: string; mimeType?: string }>
-    > {
+    ): Promise<Array<{ type: string; name: string; localPath: string; data?: string; mimeType?: string }>> {
       const mediaTypes: Array<{ key: string; type: string; ext: string }> = [
         { key: 'imageMessage', type: 'image', ext: '.jpg' },
         { key: 'videoMessage', type: 'video', ext: '.mp4' },
