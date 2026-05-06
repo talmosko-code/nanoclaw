@@ -31,7 +31,6 @@ import {
 import type { GroupMetadata, WAMessageKey, WAMessage, WASocket } from '@whiskeysockets/baileys';
 
 import { ASSISTANT_HAS_OWN_NUMBER, ASSISTANT_NAME, DATA_DIR } from '../config.js';
-import { resolveTranscribableMime, transcribeAudio } from '../modules/stt/groq.js';
 import { readEnvFile } from '../env.js';
 import { log } from '../log.js';
 import { registerChannelAdapter } from './channel-registry.js';
@@ -380,64 +379,14 @@ registerChannelAdapter('whatsapp', {
       }
     }
 
-    /** Groq STT for native WhatsApp voice notes (Chat SDK bridge already transcribes there). */
-    async function transcribeFirstWhatsAppAudioAttachment(
-      attachments: Array<{ type: string; name: string; localPath: string }>,
-      waMimeHint: string | undefined,
-    ): Promise<{ attachments: typeof attachments; transcript: string }> {
-      const out = [...attachments];
-      let transcript = '';
-
-      for (let i = 0; i < out.length; i++) {
-        if (out[i].type !== 'audio') continue;
-        const fullPath = path.join(DATA_DIR, out[i].localPath);
-        let buffer: Buffer;
-        try {
-          buffer = fs.readFileSync(fullPath);
-        } catch (err) {
-          log.warn('WhatsApp STT: could not read audio file', { path: fullPath, err });
-          continue;
-        }
-
-        const mime = resolveTranscribableMime(waMimeHint, { type: 'audio', name: out[i].name });
-        if (!mime) {
-          log.debug('WhatsApp STT: could not resolve MIME', { waMimeHint, name: out[i].name });
-          continue;
-        }
-
-        try {
-          const result = await transcribeAudio(buffer, mime, {
-            model: 'whisper-large-v3',
-            language: 'he',
-          });
-          if (result.text?.trim()) {
-            transcript = result.text.trim();
-            try {
-              fs.unlinkSync(fullPath);
-            } catch {
-              /* keep file if unlink fails */
-            }
-            out.splice(i, 1);
-            log.info('WhatsApp voice transcribed via Groq', {
-              language: result.language,
-              preview: transcript.slice(0, 80),
-            });
-          }
-        } catch (err) {
-          log.error('WhatsApp STT failed', { err });
-        }
-        break;
-      }
-
-      return { attachments: out, transcript };
-    }
-
     /** Download media from an inbound message, save to /workspace/attachments/. */
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async function downloadInboundMedia(
       msg: WAMessage,
       normalized: any,
-    ): Promise<Array<{ type: string; name: string; localPath: string }>> {
+    ): Promise<
+      Array<{ type: string; name: string; localPath: string; data?: string; mimeType?: string }>
+    > {
       const mediaTypes: Array<{ key: string; type: string; ext: string }> = [
         { key: 'imageMessage', type: 'image', ext: '.jpg' },
         { key: 'videoMessage', type: 'video', ext: '.mp4' },
@@ -455,7 +404,15 @@ registerChannelAdapter('whatsapp', {
           fs.mkdirSync(attachDir, { recursive: true });
           const filePath = path.join(attachDir, filename);
           fs.writeFileSync(filePath, buffer);
-          results.push({ type, name: filename, localPath: `attachments/${filename}` });
+          results.push({
+            type,
+            name: filename,
+            localPath: `attachments/${filename}`,
+            ...(type === 'audio' && {
+              data: buffer.toString('base64'),
+              mimeType: normalized[key].mimetype,
+            }),
+          });
           log.info('Media downloaded', { type, filename });
         } catch (err) {
           log.warn('Failed to download media', { type, err });
@@ -685,23 +642,9 @@ registerChannelAdapter('whatsapp', {
             }
 
             // Download media attachments (images, video, audio, documents)
-            let attachments = await downloadInboundMedia(msg, normalized);
-
-            // Always transcribe the first voice attachment when present — not only when
-            // `content` is empty. Captions / concurrent image captions skip transcription
-            // otherwise, leaving host-local paths (`data/attachments/`) that the container's
-            // `/workspace` mount cannot see (see docs/session mounts vs formatter paths).
-            if (attachments.some((a) => a.type === 'audio')) {
-              const stt = await transcribeFirstWhatsAppAudioAttachment(
-                attachments,
-                typeof normalized.audioMessage?.mimetype === 'string' ? normalized.audioMessage.mimetype : undefined,
-              );
-              attachments = stt.attachments;
-              if (stt.transcript) {
-                const prev = String(content ?? '').trim();
-                content = prev ? `${prev}\n\n${stt.transcript}` : stt.transcript;
-              }
-            }
+            // Voice/audio data (base64 + mimeType) is included in the attachment
+            // for the container-side STT to transcribe.
+            const attachments = await downloadInboundMedia(msg, normalized);
 
             // Skip empty protocol messages (no text and no attachments)
             if (!content && attachments.length === 0) continue;

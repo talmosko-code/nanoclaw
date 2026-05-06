@@ -21,7 +21,6 @@ import { SqliteStateAdapter } from '../state-sqlite.js';
 import { registerWebhookAdapter } from '../webhook-server.js';
 import { getAskQuestionRender } from '../db/sessions.js';
 import { normalizeOptions, type NormalizedOption } from './ask-question.js';
-import { resolveTranscribableMime, shouldRunGroqSttOnAttachment, transcribeAudio } from '../modules/stt/groq.js';
 import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
 
 /** Adapter with optional gateway support (e.g., Discord). */
@@ -151,20 +150,11 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           height: (att as unknown as Record<string, unknown>).height,
         };
         if (att.fetchData) {
-          // Pre-check if this attachment is transcribable audio (voice/video note).
-          // If it fails to download, the transcription is lost for good because
-          // the Telegram polling offset already moved past this update.
-          // Retry with exponential backoff so transient 502 / NetworkErrors
-          // don't silently drop voice data.
-          const transcribableMime = resolveTranscribableMime(
-            typeof att.mimeType === 'string' ? att.mimeType : undefined,
-            {
-              type: typeof att.type === 'string' ? att.type : undefined,
-              name: typeof att.name === 'string' ? att.name : undefined,
-            },
-          );
-          const isTranscribable = !!transcribableMime;
-          const maxAttempts = isTranscribable ? 3 : 1;
+          // Retry audio downloads with exponential backoff so transient
+          // 502 / NetworkErrors don't silently drop voice data.
+          // Non-audio attachments keep original single-attempt behavior.
+          const isAudio = typeof att.type === 'string' && att.type === 'audio';
+          const maxAttempts = isAudio ? 3 : 1;
           let lastErr: unknown;
           for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             if (attempt > 1) {
@@ -197,39 +187,6 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         enriched.push(entry);
       }
       serialized.attachments = enriched;
-
-      // Groq STT: voice / audio / Telegram video_note. Runs even if text is non-empty (caption + voice).
-      let didTranscribe = false;
-      for (let i = 0; i < enriched.length; i++) {
-        const att = enriched[i];
-        const mime = resolveTranscribableMime(typeof att.mimeType === 'string' ? att.mimeType : undefined, {
-          type: typeof att.type === 'string' ? att.type : undefined,
-          name: typeof att.name === 'string' ? att.name : undefined,
-        });
-        if (!att.data || !mime || !shouldRunGroqSttOnAttachment(att, mime)) continue;
-
-        try {
-          const buffer = Buffer.from(att.data as string, 'base64');
-          const result = await transcribeAudio(buffer, mime, {
-            model: 'whisper-large-v3',
-            language: 'he', // Hebrew hint; Groq auto-detects when wrong
-          });
-          const piece = result.text?.trim();
-          if (piece) {
-            const prev = String(serialized.text ?? '').trim();
-            serialized.text = prev ? `${prev}\n\n${piece}` : piece;
-            enriched.splice(i, 1);
-            log.info('Voice message transcribed via Groq', {
-              text: piece.slice(0, 100),
-              language: result.language,
-            });
-            didTranscribe = true;
-          }
-        } catch (err) {
-          log.error('STT transcription failed', { err });
-        }
-        if (didTranscribe) break;
-      }
     }
 
     // Extract reply context via platform-specific hook

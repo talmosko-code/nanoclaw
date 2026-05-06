@@ -143,6 +143,13 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       continue;
     }
 
+    // Auto-transcribe voice/audio messages: if a message contains an audio
+    // attachment with base64-encoded data, transcribe it via Groq Whisper API
+    // and replace the message text with the transcription. The container runs
+    // through the OneCLI proxy (HTTPS_PROXY) which injects the Groq API key
+    // automatically for api.groq.com requests.
+    await transcribeVoiceMessages(keep);
+
     // Format messages: passthrough commands get raw text (only if the
     // provider natively handles slash commands), others get XML.
     const prompt = formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
@@ -418,6 +425,79 @@ function sendToDestination(dest: DestinationEntry, body: string, routing: Routin
     thread_id: routing.threadId,
     content: JSON.stringify({ text: body }),
   });
+}
+
+// ── Auto-transcribe voice messages ──────────────────────────────
+
+/**
+ * Transcribe voice/audio attachments in pending messages using Groq Whisper API.
+ * Runs before formatting so the agent sees transcribed text instead of raw audio.
+ * The request goes through the OneCLI proxy (HTTPS_PROXY) which injects the
+ * Groq API key automatically for api.groq.com.
+ */
+async function transcribeVoiceMessages(messages: MessageInRow[]): Promise<void> {
+  for (const msg of messages) {
+    let content: Record<string, unknown>;
+    try {
+      content = JSON.parse(typeof msg.content === 'string' ? msg.content : '{}');
+    } catch {
+      continue;
+    }
+
+    const attachments = content.attachments;
+    if (!Array.isArray(attachments) || attachments.length === 0) continue;
+
+    for (let i = 0; i < attachments.length; i++) {
+      const att = attachments[i] as Record<string, unknown>;
+      if (att.type !== 'audio') continue;
+      const audioData = att.data;
+      const mimeType = att.mimeType;
+      if (typeof audioData !== 'string' || typeof mimeType !== 'string') continue;
+
+      const text = typeof content.text === 'string' ? content.text : '';
+      const prev = text.trim();
+
+      try {
+        const audioBuffer = Buffer.from(audioData, 'base64');
+
+        // Build form data for Groq Whisper API
+        const formData = new FormData();
+        formData.append('file', new Blob([new Uint8Array(audioBuffer)], { type: mimeType }), 'audio');
+        formData.append('model', 'whisper-large-v3');
+        formData.append('language', 'he');
+
+        const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const errText = await response.text().catch(() => 'unknown');
+          console.error(`[transcribe] Groq API error: ${response.status} ${errText}`);
+          continue;
+        }
+
+        const result = (await response.json()) as { text?: string };
+        const piece = result.text?.trim();
+        if (!piece) {
+          console.error('[transcribe] Empty transcription result');
+          continue;
+        }
+
+        // Replace message text with transcription
+        content.text = prev ? `${prev}\n\n${piece}` : piece;
+        // Remove the audio attachment since it's been transcribed
+        attachments.splice(i, 1);
+        // Serialize the modified content back
+        msg.content = JSON.stringify(content);
+
+        console.error(`[transcribe] Voice transcribed: ${piece.slice(0, 80)}…`);
+      } catch (err) {
+        console.error('[transcribe] Failed to transcribe voice message', err instanceof Error ? err.message : String(err));
+      }
+      break; // Only transcribe the first audio attachment
+    }
+  }
 }
 
 function sleep(ms: number): Promise<void> {
