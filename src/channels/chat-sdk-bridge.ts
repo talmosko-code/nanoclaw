@@ -106,6 +106,48 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
   let gatewayAbort: AbortController | null = null;
 
   async function messageToInbound(message: ChatMessage, isMention: boolean): Promise<InboundMessage> {
+    // ── Phase 1: Download attachment data BEFORE serialization ──────────
+    // message.attachments carries the original objects with fetchData().
+    // Download each, keyed by index, so we can patch into serialized output
+    // after toJSON() strips function references.
+    const rawAtts = (message.attachments ?? []) as unknown as Array<Record<string, unknown>>;
+    const downloadedData: Record<number, string> = {};
+    for (let i = 0; i < rawAtts.length; i++) {
+      const rawAtt = rawAtts[i];
+      if (!rawAtt.fetchData) continue;
+      const isAudio = rawAtt.type === 'audio';
+      const maxAttempts = isAudio ? 3 : 1;
+      let lastErr: unknown;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if (attempt > 1) {
+          // Exponential backoff: 1s, 2s
+          await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt - 2)));
+        }
+        try {
+          const buffer = await (rawAtt.fetchData as () => Promise<Buffer>)();
+          downloadedData[i] = buffer.toString('base64');
+          lastErr = undefined;
+          break;
+        } catch (err) {
+          lastErr = err;
+          log.warn('Failed to download attachment (retry)', {
+            type: rawAtt.type,
+            attempt,
+            maxAttempts,
+            err,
+          });
+        }
+      }
+      if (lastErr) {
+        log.error('Failed to download attachment after all retries', {
+          type: rawAtt.type,
+          err: lastErr,
+          maxAttempts,
+        });
+      }
+    }
+
+    // ── Phase 2: Serialize ──────────────────────────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const serialized = message.toJSON() as Record<string, any>;
 
@@ -136,63 +178,16 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       }
     }
 
-    // Download attachment data before serialization loses fetchData()
-    const attsFromSerialized = (serialized.attachments as Array<Record<string, unknown>> | undefined) ?? [];
-    if (attsFromSerialized.length > 0) {
-      const enriched: Array<Record<string, unknown>> = [];
-      for (const att of attsFromSerialized) {
-        const entry: Record<string, unknown> = {
-          type: att.type,
-          name: att.name,
-          mimeType: att.mimeType,
-          size: att.size,
-          width: (att as Record<string, unknown>).width,
-          height: (att as Record<string, unknown>).height,
-        };
-        // fetchData is lost after serialization — the original message object
-        // still carries it via a getter. Use the pre-serialization attachment
-        // objects from the raw message to call fetchData and download the data.
-        const rawAtt = (message.attachments ?? [])[
-          attsFromSerialized.indexOf(att)
-        ];
-        if (rawAtt?.fetchData) {
-          // Retry audio downloads with exponential backoff so transient
-          // 502 / NetworkErrors don't silently drop voice data.
-          // Non-audio attachments keep original single-attempt behavior.
-          const isAudio = typeof att.type === 'string' && att.type === 'audio';
-          const maxAttempts = isAudio ? 3 : 1;
-          let lastErr: unknown;
-          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-            if (attempt > 1) {
-              // Exponential backoff: 1s, 2s
-              await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt - 2)));
-            }
-            try {
-              const buffer = await rawAtt.fetchData();
-              entry.data = buffer.toString('base64');
-              lastErr = undefined;
-              break;
-            } catch (err) {
-              lastErr = err;
-              log.warn('Failed to download attachment (retry)', {
-                type: att.type,
-                attempt,
-                maxAttempts,
-                err,
-              });
-            }
-          }
-          if (lastErr) {
-            log.error('Failed to download attachment after all retries', {
-              type: att.type,
-              err: lastErr,
-              maxAttempts,
-            });
-          }
+    // ── Phase 3: Patch downloaded data into serialized attachments ──────
+    // toJSON() maps attachments to {type, url, name, mimeType, size, width, height}
+    // without fetchData. Restore the binary data we downloaded in Phase 1
+    // so the container-side STT can transcribe it.
+    if (serialized.attachments && downloadedData) {
+      for (let i = 0; i < serialized.attachments.length; i++) {
+        if (downloadedData[i]) {
+          serialized.attachments[i].data = downloadedData[i];
         }
-        enriched.push(entry);
       }
-      serialized.attachments = enriched;
     }
 
     // Extract reply context via platform-specific hook

@@ -372,7 +372,7 @@ The `@chat-adapter/telegram` uses **long-polling** (`api.telegram.org`). When th
 
 1. **Check error log for Telegram polling failures:**
    ```bash
-   grep -c "Telegram polling request failed\|NetworkError\|Bad Gateway" \
+   grep -c "Telegram polling request failed\\|NetworkError\\|Bad Gateway" \
      logs/nanoclaw.error.log
    ```
 
@@ -385,9 +385,74 @@ The `@chat-adapter/telegram` uses **long-polling** (`api.telegram.org`). When th
 
 3. **Check for "STT transcription failed" in logs:**
    ```bash
-   grep "STT transcription failed\|Failed to download attachment" \
+   grep "STT transcription failed\\|Failed to download attachment" \
      logs/nanoclaw.error.log | tail -10
    ```
+
+### Chat SDK Serialization Bug (Container-Side STT)
+
+When the container-side STT (`transcribeVoiceMessages` in poll-loop.ts) doesn't fire,
+check the session DB to see if audio data actually reached the container:
+
+```bash
+sqlite3 "data/v2-sessions/<agent_group>/<session_id>/inbound.db" \
+  "SELECT substr(content, 1, 500) FROM messages_in WHERE content LIKE '%audio%' ORDER BY seq DESC LIMIT 1;"
+```
+
+**Symptom:** The attachment has `localPath` but NO `data` (base64-encoded audio).
+
+**Root cause:** The Chat SDK's `Message.toJSON()` (chat/dist/index.js line 326) creates
+NEW attachment objects mapped to `{type, url, name, mimeType, size, width, height}`
+— which LOSE `fetchData` (a function, not serializable). The host code in
+`messageToInbound()` that downloads attachments checks `message.attachments`, but
+after `toJSON()` the relationship between serialized and raw objects is unclear.
+
+**Fix (applied in chat-sdk-bridge.ts):**
+Iterate through `serialized.attachments` (from `toJSON()`) but look up the
+corresponding raw attachment from `message.attachments` by index to access the
+original `fetchData` function:
+
+```typescript
+const attsFromSerialized = serialized.attachments ?? [];
+for (const att of attsFromSerialized) {
+    const rawAtt = (message.attachments ?? [])[attsFromSerialized.indexOf(att)];
+    if (rawAtt?.fetchData) {
+        const buffer = await rawAtt.fetchData();
+        entry.data = buffer.toString('base64');
+    }
+}
+```
+
+This ensures the base64 audio data reaches the session DB, where the container's
+`transcribeVoiceMessages()` can process it.
+
+### Container-Side STT Not Working
+
+After host-side STT was moved to the container (`transcribeVoiceMessages` in
+`container/agent-runner/src/poll-loop.ts`), check the container logs for:
+
+| Log message | Meaning |
+|-------------|---------|
+| `[transcribe] Voice transcribed: …` | STT succeeded |
+| `[transcribe] Groq API error: NNN` | Groq API returned error |
+| `[transcribe] Failed to transcribe` | Exception during transcription |
+| (no `[transcribe]` logs at all) | Message reached container without audio data; check session DB |
+
+The agent-runner source is mounted as a read-only bind mount (from
+`container/agent-runner/src/` to `/app/src`). Source-only changes to poll-loop.ts
+NEVER require a container image rebuild — just a NanoClaw restart.
+
+If Groq API calls fail from the container, verify the OneCLI proxy is healthy
+and the Groq API key is configured:
+
+```bash
+onecli secrets list | grep -i groq
+# Should show "name": "Groq API Key", "hostPattern": "api.groq.com"
+```
+
+The container uses `HTTPS_PROXY=http://x:***@host.docker.internal:10255` which
+routes through the OneCLI gateway. The gateway MITM-injects the Groq key for
+matching `hostPattern` domains.
 
 4. **Test OneCLI gateway proxy for Telegram:**
    ```bash
