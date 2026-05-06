@@ -248,6 +248,52 @@ registerChannelAdapter('whatsapp', {
       return jid;
     }
 
+    /** JIDs WhatsApp attaches when someone @-mentions a participant (groups + some 1:1). */
+    function collectMentionedJids(normalized: Record<string, unknown>): string[] {
+      const out: string[] = [];
+      const add = (ctx: unknown) => {
+        if (!ctx || typeof ctx !== 'object') return;
+        const mentionedJid = (ctx as { mentionedJid?: unknown }).mentionedJid;
+        if (!Array.isArray(mentionedJid)) return;
+        for (const j of mentionedJid) {
+          if (typeof j === 'string' && j.length > 0) out.push(j);
+        }
+      };
+      for (const key of [
+        'extendedTextMessage',
+        'imageMessage',
+        'videoMessage',
+        'documentMessage',
+        'audioMessage',
+        'stickerMessage',
+      ] as const) {
+        const sub = normalized[key];
+        if (sub && typeof sub === 'object' && 'contextInfo' in sub) {
+          add((sub as { contextInfo?: unknown }).contextInfo);
+        }
+      }
+      return out;
+    }
+
+    /** True if the linked device (bot) is among `mentionedJid` entries (phone or LID). */
+    async function mentionIncludesBot(jids: string[]): Promise<boolean> {
+      if (jids.length === 0 || !sock.user) return false;
+      const myNorm = normalizePnJid(sock.user.id);
+      const myLidUser = sock.user.lid ? sock.user.lid.split('@')[0].split(':')[0] : undefined;
+
+      for (const raw of jids) {
+        const mentionUser = raw.split('@')[0].split(':')[0];
+        if (myLidUser && mentionUser === myLidUser) return true;
+
+        let resolved = raw;
+        if (raw.endsWith('@lid')) {
+          resolved = await translateJid(raw);
+        }
+        if (normalizePnJid(resolved) === myNorm) return true;
+      }
+      return false;
+    }
+
     /** Many 1:1 chats use `remoteJid` ending in @lid — router needs `@s.whatsapp.net` to match `register`. */
     async function resolveLidViaUsync(ws: WASocket, lidJid: string): Promise<string | undefined> {
       try {
@@ -690,9 +736,13 @@ registerChannelAdapter('whatsapp', {
               }
             }
 
+            const mentionedJids = collectMentionedJids(normalized as Record<string, unknown>);
+            const isWaMention = await mentionIncludesBot(mentionedJids);
+
             const inbound: InboundMessage = {
               id: msg.key.id || `wa-${Date.now()}`,
               kind: 'chat',
+              isMention: isWaMention,
               content: {
                 text: content,
                 sender,

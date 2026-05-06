@@ -71,14 +71,15 @@ export interface InboundMessage {
    *
    * Set by adapters that know the platform's own mention semantics — e.g.
    * the Chat SDK bridge sets it true from `onNewMention` / `onDirectMessage`
-   * and forwards `message.isMention` from `onSubscribedMessage`. Use this
-   * in the router instead of agent-name regex matching, which breaks on
-   * platforms where the mention text is the bot's platform username (e.g.
-   * Telegram's `@nanoclaw_v2_refactr_1_bot`) rather than the agent_group
-   * display name (e.g. `@Andy`).
+   * and forwards `message.isMention` from `onSubscribedMessage`; the native
+   * WhatsApp (Baileys) adapter sets it from `contextInfo.mentionedJid` when
+   * the linked device is tagged. Use this in the router instead of agent-name
+   * regex matching, which breaks on platforms where the mention text is the
+   * bot's platform username (e.g. Telegram's `@nanoclaw_v2_refactr_1_bot`)
+   * rather than the agent_group display name (e.g. `@Andy`).
    *
-   * Adapters that don't set it (native / legacy) leave it undefined — the
-   * router falls back to text-match against agent_group_name.
+   * Adapters that don't set it leave it undefined — the router then treats
+   * `isMention` as false (no text-based fallback today).
    */
   isMention?: boolean;
 }

@@ -151,11 +151,47 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           height: (att as unknown as Record<string, unknown>).height,
         };
         if (att.fetchData) {
-          try {
-            const buffer = await att.fetchData();
-            entry.data = buffer.toString('base64');
-          } catch (err) {
-            log.warn('Failed to download attachment', { type: att.type, err });
+          // Pre-check if this attachment is transcribable audio (voice/video note).
+          // If it fails to download, the transcription is lost for good because
+          // the Telegram polling offset already moved past this update.
+          // Retry with exponential backoff so transient 502 / NetworkErrors
+          // don't silently drop voice data.
+          const transcribableMime = resolveTranscribableMime(
+            typeof att.mimeType === 'string' ? att.mimeType : undefined,
+            {
+              type: typeof att.type === 'string' ? att.type : undefined,
+              name: typeof att.name === 'string' ? att.name : undefined,
+            },
+          );
+          const isTranscribable = !!transcribableMime;
+          const maxAttempts = isTranscribable ? 3 : 1;
+          let lastErr: unknown;
+          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            if (attempt > 1) {
+              // Exponential backoff: 1s, 2s
+              await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt - 2)));
+            }
+            try {
+              const buffer = await att.fetchData();
+              entry.data = buffer.toString('base64');
+              lastErr = undefined;
+              break;
+            } catch (err) {
+              lastErr = err;
+              log.warn('Failed to download attachment (retry)', {
+                type: att.type,
+                attempt,
+                maxAttempts,
+                err,
+              });
+            }
+          }
+          if (lastErr) {
+            log.error('Failed to download attachment after all retries', {
+              type: att.type,
+              err: lastErr,
+              maxAttempts,
+            });
           }
         }
         enriched.push(entry);

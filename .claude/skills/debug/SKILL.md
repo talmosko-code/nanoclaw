@@ -315,6 +315,104 @@ cat data/ipc/{groupFolder}/current_tasks.json
 - `current_tasks.json` - Host writes: read-only snapshot of scheduled tasks
 - `available_groups.json` - Host writes: read-only list of WhatsApp groups (main only)
 
+## Telegram Voice Note Timing Issues
+
+### Symptom (Specific to Telegram)
+Voice notes in Telegram get an immediate response (before transcription completes), while on WhatsApp the agent waits for transcription and responds correctly. Only after sending a follow-up text message does the agent reply about the voice note content on Telegram.
+
+### Root Cause
+Two interacting issues, both specific to Telegram's Chat SDK adapter:
+
+**1. Telegram Polling Failures (Primary Cause)**
+```
+[chat-sdk:telegram] Telegram polling request failed {
+  error: 'NetworkError: Bad Gateway (status 502, error 502)',
+  ...
+}
+```
+The `@chat-adapter/telegram` uses **long-polling** (`api.telegram.org`). When the OneCLI proxy or network has issues, polling fails with 502/NetworkError. During failures:
+- Pending voice notes accumulate unprocessed
+- On recovery, updates arrive in a batch — `fetchData()` on the attachment may fail because the voice file download is attempted through the same unstable proxy
+- If `fetchData()` fails, `entry.data` stays `undefined`, transcription is **skipped**
+- The message reaches the container with `text=""` (empty) — the container responds to nothing meaningful
+- The voice note gets re-fetched later on a subsequent poll, but by then the agent already responded
+
+**2. Architectural Difference: WhatsApp vs Telegram**
+
+| Aspect | WhatsApp (native) | Telegram (Chat SDK bridge) |
+|--------|-------------------|---------------------------|
+| Transport | WebSocket (persistent) | HTTP long-poll |
+| STT location | `whatsapp.ts` — `transcribeFirstWhatsAppAudioAttachment()`, separate function | `chat-sdk-bridge.ts` — `messageToInbound()`, inline loop |
+| Download | `downloadMediaMessage()` → saved to disk → `fs.readFileSync` | `att.fetchData()` → lazy download via `@chat-adapter/telegram.downloadFile()` → `fetch()` to Telegram file URL |
+| Polling failures | None (WebSocket) | 502/NetworkError collapses inbound entirely |
+| Voice timing | Awaits transcription before `onInbound` | Same awaiter pattern, but polling failures cause fetchData to fail → transcription skipped |
+
+### Key Code Paths
+
+**Telegram voice processing** (`chat-sdk-bridge.ts`):
+```typescript
+// Line 111: serialized = message.toJSON() — snapshot BEFORE data download
+// Line 155: const buffer = await att.fetchData();  // Can fail via OneCLI proxy
+// Line 173: if (!att.data || !mime || !shouldRunGroqSttOnAttachment(att, mime)) continue;
+//          → SKIPS transcription when fetchData returned undefined
+// Line 184: serialized.text = prev ? `${prev}\n\n${piece}` : piece;
+//          → Only replaces text if transcription succeeded
+```
+
+**WhatsApp voice processing** (`whatsapp.ts`):
+```typescript
+// Line 694: if (attachments.some((a) => a.type === 'audio')) {
+// Line 695: const stt = await transcribeFirstWhatsAppAudioAttachment(...)
+// Line 700: if (stt.transcript) content = stt.transcript;
+// Line 742: inbound: InboundMessage = { content: { text: content, ... } }
+//          → Content built AFTER transcription, no race possible
+```
+
+### How to Check if Polling/FetchData Failures Are the Cause
+
+1. **Check error log for Telegram polling failures:**
+   ```bash
+   grep -c "Telegram polling request failed\|NetworkError\|Bad Gateway" \
+     logs/nanoclaw.error.log
+   ```
+
+2. **Check if GROQ API key is set:**
+   ```bash
+   grep "GROQ_API_KEY" .env
+   grep "GROQ_API_KEY" src/config.ts
+   ```
+   Note: The STT module at `src/modules/stt/groq.ts` reads `GROQ_API_KEY` directly from config (imported from `src/config.ts`, which reads from `.env` or `process.env`). If the key is missing, `transcribeAudio()` throws → catch block logs "STT transcription failed" → message continues with empty text.
+
+3. **Check for "STT transcription failed" in logs:**
+   ```bash
+   grep "STT transcription failed\|Failed to download attachment" \
+     logs/nanoclaw.error.log | tail -10
+   ```
+
+4. **Test OneCLI gateway proxy for Telegram:**
+   ```bash
+   # Test through proxy (port 10255 is the gateway)
+   curl -s -x http://127.0.0.1:10255 \
+     "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMe" | head
+
+   # Test direct
+   curl -s \
+     "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMe" | head
+   ```
+
+### Fixes
+
+**Short-term: Check connectivity between OneCLI proxy and Telegram API.**
+The 502s come from the OneCLI gateway proxy not reaching `api.telegram.org`. Check:
+```bash
+# Verify proxy is routing correctly
+curl -v --proxy http://127.0.0.1:10255 \
+  "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMe" 2>&1 | grep -E "HTTP/|error|refused"
+```
+
+**Long-term: Add retry with backoff for fetchData failures in chat-sdk-bridge.ts.**
+Currently, if `fetchData()` resolves to a falsy value or throws, the attachment data is lost and the message proceeds without transcription. Adding a retry wrapper around `att.fetchData()` with exponential backoff would recover from transient polling hiccups.
+
 ## Quick Diagnostic Script
 
 Run this to check common issues:
